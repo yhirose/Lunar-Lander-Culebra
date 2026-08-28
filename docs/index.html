@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lunar Lander in Culebra</title>
+<meta name="description" content="aayala4's Lunar-Lander-Python ported to Culebra, playable in the browser.">
+<!-- The lander the game draws, as line art: a descent stage on two splayed
+     legs. Monochrome and keyed to the system theme rather than to this page,
+     because a favicon is painted into the browser's chrome, which stays light
+     while the page below it is always dark. The Playground under docs/ carries
+     the same mark in culebra's blue. -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='1.6 2.1 20.8 20.8'><style>:root { color: %231a1a1a } @media (prefers-color-scheme: dark) { :root { color: %23e8e8e8 } }</style><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M8 4.5h8l2 4.5-2 4.5H8L6 9z'/><path d='M8.5 13.5 5 20M15.5 13.5 19 20'/><path d='M3 20.5h4M17 20.5h4'/></g></svg>">
+<style>
+  :root {
+    color-scheme: dark;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 3rem 1.25rem 4rem;
+    background: #000;
+    color: #e8e8e8;
+    font: 15px/1.65 var(--mono);
+  }
+  main { max-width: 62rem; margin: 0 auto; }
+  h1 {
+    margin: 0 0 .35rem;
+    font-size: clamp(1.6rem, 5vw, 2.6rem);
+    letter-spacing: .16em;
+    font-weight: 700;
+  }
+  .tagline { margin: 0 0 2rem; color: #9a9a9a; }
+  .tagline a { color: #9a9a9a; }
+  a { color: #e8e8e8; }
+  a:hover { color: #fff; }
+
+  /* The game is a 1400x800 framebuffer; hold that ratio at every width. */
+  .game {
+    position: relative;
+    aspect-ratio: 7 / 4;
+    border: 1px solid #2a2a2a;
+    background: #000;
+    overflow: hidden;
+  }
+  .game img,
+  .game iframe {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    border: 0;
+  }
+  /* Both stand-ins sit above the frame, which is appended after them, and are
+     removed on the first frame. The frame is not opaque on its own: the
+     Playground page leaves html/body transparent, so it paints white until the
+     script below blacks it out, which it cannot do before that document
+     exists. So the poster carries its own #000 rather than only the pixels of
+     the image. object-fit: contain leaves a sub-pixel letterbox down each
+     side, and that sliver alone was enough to flash a white line along both
+     edges of the game on a reload. */
+  .game img,
+  .loading { z-index: 1; }
+  .game img { object-fit: contain; background: #000; filter: brightness(.45); }
+  .loading {
+    position: absolute;
+    inset: auto 0 12%;
+    margin: 0;
+    text-align: center;
+    color: #9a9a9a;
+    letter-spacing: .2em;
+  }
+
+  #log {
+    margin: 0 0 2rem;
+    padding: .75rem;
+    border: 1px solid #2a2a2a;
+    color: #7ee787;
+    font: 12px/1.5 var(--mono);
+    white-space: pre-wrap;
+    max-height: 18rem;
+    overflow: auto;
+  }
+  .hint {
+    margin: .75rem 0 2.5rem;
+    color: #7c7c7c;
+    font-size: .875rem;
+  }
+  h2 {
+    margin: 2.5rem 0 .75rem;
+    font-size: 1rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: #9a9a9a;
+  }
+  dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.5rem; }
+  dt { color: #fff; }
+  dd { margin: 0; color: #bdbdbd; }
+  p { margin: 0 0 1rem; color: #bdbdbd; }
+  footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #1e1e1e; color: #7c7c7c; font-size: .875rem; }
+  footer a { color: #9a9a9a; }
+  @media (max-width: 34rem) {
+    dl { grid-template-columns: 1fr; gap: 0 0; }
+    dd { margin-bottom: .6rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>LUNAR LANDER</h1>
+  <p class="tagline">
+    <a href="https://github.com/aayala4/Lunar-Lander-Python">aayala4's Lunar-Lander-Python</a>
+    ported to <a href="https://github.com/yhirose/culebra">Culebra</a>, running here as WebAssembly.
+  </p>
+
+  <div class="game" id="game">
+    <img src="./assets/poster.png" alt="Lunar Lander title screen" width="1400" height="800">
+    <p class="loading" id="loading">loading&#8230;</p>
+  </div>
+  <p class="hint">Press P to start, or click the game.</p>
+  <pre id="log" hidden></pre>
+
+  <h2>Controls</h2>
+  <dl>
+    <dt>P</dt><dd>start a round</dd>
+    <dt>&#8592; &#8594;</dt><dd>rotate the hull (it spawns pointing sideways, so level it first)</dd>
+    <dt>&#8593; &#8595;</dt><dd>strengthen and weaken the thrusters</dd>
+    <dt>Q</dt><dd>back to the title screen</dd>
+  </dl>
+
+  <h2>Landing</h2>
+  <p>
+    Put both feet down under 12 units of vertical speed and 25 of horizontal for a good
+    landing, worth 50 points and 50 units of fuel back. The flattened pads marked 2x
+    through 5x multiply the score, and the narrower the pad the more it pays. Come in
+    faster and it is a hard landing or a crash, and a crash costs 100 fuel. When the tank
+    empties, the game is over.
+  </p>
+
+  <footer>
+    <a href="https://github.com/yhirose/Lunar-Lander-Culebra">Source</a> &middot;
+    GPL-3.0, the same as the original &middot;
+    the interpreter running above is <a href="https://github.com/yhirose/culebra">culebra</a>, MIT
+  </footer>
+</main>
+
+<script>
+  // ?debug=1 shows what the page sees of every press, for working out where a
+  // key is going when the game does not respond to it.
+  var LOG = document.getElementById("log");
+  var DEBUG = new URLSearchParams(location.search).get("debug") === "1";
+  if (DEBUG) LOG.hidden = false;
+  function log(m) {
+    if (!DEBUG) return;
+    LOG.textContent += m + "\n";
+    LOG.scrollTop = LOG.scrollHeight;
+  }
+  // Did the game act on it? The HUD lights up the top of the frame the moment
+  // a round starts, so a pixel count there answers without reading the wasm.
+  function reportReaction(doc) {
+    var cv = doc.querySelector("canvas");
+    var count = function () {
+      try {
+        var px = cv.getContext("2d").getImageData(0, 0, cv.width, 120).data;
+        var n = 0;
+        for (var i = 0; i < px.length; i += 4) if (px[i] > 40) n++;
+        return n;
+      } catch (err) { return "unreadable: " + err.name; }
+    };
+    var before = count();
+    setTimeout(function () {
+      log("  -> HUD pixels " + before + " -> " + count() +
+          " (a round has started when this rises)");
+    }, 2000);
+  }
+
+  function where(e) {
+    var t = e.target;
+    var n = t === window ? "window" : t === document ? "document"
+      : (t.tagName || String(t)) + (t.id ? "#" + t.id : "");
+    return e.code + " target=" + n + " trusted=" + e.isTrusted;
+  }
+  // Two things the embedded Playground cannot do for itself, both fixed from
+  // here because the frame is same-origin.
+  //
+  // Keys: the Playground listens on its canvas pane and focuses it as it
+  // starts, which is enough on its own page. In an iframe it is not: a frame
+  // nobody has clicked has no focus to hand over, and a later click lands on
+  // the <canvas>, which is not focusable. So take the focus when the frame is
+  // up and on every press inside it, and repeat every key the game uses onto
+  // the pane from wherever it lands, so nothing depends on the focus having
+  // gone where it should.
+  //
+  // Background: the Playground page leaves html/body transparent and keeps the
+  // browser's default 8px body margin, so in a light-mode browser that margin
+  // paints white down both sides of the game.
+  // Returns true once it has actually wired the loaded Playground, so the
+  // caller can stop asking. A dynamically created iframe can fire `load` for
+  // its initial about:blank, where there is no pane to wire, so readiness is
+  // the pane being there rather than any one event having fired.
+  function adoptFrame(frame) {
+    var doc = frame.contentDocument;
+    var pane = doc && doc.getElementById("canvas-pane");
+    if (!pane) return false;
+    if (frame.dataset.adopted) return true;
+    frame.dataset.adopted = "1";
+    doc.documentElement.style.background = "#000";
+    doc.body.style.margin = "0";
+    var innerActive = function () {
+      var a = doc.activeElement;
+      return a && (a.id || a.tagName);
+    };
+    var take = function () {
+      frame.contentWindow.focus();
+      pane.focus();
+    };
+    // A press inside the frame always puts it back, and that is the reliable
+    // path. Taking it unprompted depends on the frame being ready and the page
+    // being the focused one, so try again a few times rather than once.
+    take();
+    setTimeout(take, 200);
+    setTimeout(take, 1500);
+    doc.addEventListener("pointerdown", take, true);
+    window.addEventListener("focus", take);
+
+    // A click is a way in that no key-grabbing browser extension can take: a
+    // vim-style one binds the letter keys and swallows P before any listener
+    // here sees it, which leaves a keyboard-only game with no way to start.
+    // The game only reads P on its title screen, so sending one per click is
+    // "click to start" there and nothing at all during a round.
+    doc.addEventListener("pointerdown", function () {
+      log("click -> sending a P press");
+      ["keydown", "keyup"].forEach(function (type) {
+        pane.dispatchEvent(new KeyboardEvent(type, {
+          key: "p",
+          code: "KeyP",
+          bubbles: true,
+        }));
+      });
+    }, true);
+    log("frame wired; outerFocus=" + document.hasFocus() +
+        " frameFocus=" + doc.hasFocus() + " innerActive=" + innerActive());
+
+    // Then deliver the keys the game uses to that pane wherever they land,
+    // rather than reasoning about which document holds the keyboard. The two
+    // focus questions a page can ask (activeElement, hasFocus) answer for the
+    // outer document and the frame separately, and getting either wrong leaves
+    // the game deaf, so this asks neither: a press whose target is already the
+    // pane is left to the Playground's own listener, and any other press is
+    // repeated onto it. A repeat arrives with the pane as its target, so it
+    // stops there rather than bouncing.
+    var PLAYED = /^(Arrow(Up|Down|Left|Right)|Key[PQ]|Escape)$/;
+    var deliverFrom = function (at) {
+      return function (e) {
+        // window capture and document capture both see the same press; act once.
+        if (e.__lunar) return;
+        e.__lunar = true;
+        var mine = PLAYED.test(e.code) && e.target !== pane;
+        if (DEBUG && e.type === "keydown") {
+          log((e.view === window ? "outer " : "inner ") + where(e) +
+              " on=" + at + " innerActive=" + innerActive());
+          log(mine ? "  -> repeated onto the canvas pane"
+                   : "  -> left to the Playground's own listener");
+          if (e.code === "KeyP") reportReaction(doc);
+        }
+        if (!mine) return;
+        e.preventDefault();  // and arrows stop scrolling the page while playing
+        pane.dispatchEvent(new KeyboardEvent(e.type, {
+          key: e.key,
+          code: e.code,
+          repeat: e.repeat,
+          bubbles: true,
+        }));
+      };
+    };
+    // On both windows as well as both documents. The capture path runs
+    // window before document, so a listener here still sees a key that
+    // something listening at document level means to swallow, which is what a
+    // vim-style browser extension does to the letter keys.
+    var listeners = [
+      [window, "outer window"],
+      [document, "outer document"],
+      [frame.contentWindow, "frame window"],
+      [doc, "frame document"],
+    ];
+    for (var i = 0; i < listeners.length; i++) {
+      var on = listeners[i][0];
+      var fn = deliverFrom(listeners[i][1]);
+      on.addEventListener("keydown", fn, true);
+      on.addEventListener("keyup", fn, true);
+    }
+    return true;
+  }
+
+  // Pages serves these with max-age=600, and the Playground fetches them
+  // itself, so for ten minutes after a deploy a returning visitor can be handed
+  // a cached copy of the game while the page around it is current.
+  // Revalidating them first replaces those cache entries, so the frame always
+  // loads what is deployed. The .ogg files and the font never change and are
+  // left alone.
+  // This list is the one place that restates what examples.json already names;
+  // tools/sync-docs.cul drives its copy off that file. Fetching it in parallel
+  // is worth that, since deriving it would put a round trip in front of the
+  // 4.4 MB the frame then pulls. A module added there has to be added here.
+  function freshenGame() {
+    var paths = [
+      "examples.json",
+      "lunar-lander/lunar_lander.cul",
+      "lunar-lander/ship.cul",
+      "lunar-lander/terrain.cul",
+    ];
+    return Promise.all(paths.map(function (p) {
+      return fetch("./playground/" + p, {cache: "reload"}).then(function (r) {
+        log("freshened " + p + " (" + r.status + ")");
+      }, function (err) {
+        log("could not freshen " + p + ": " + err);  // the frame still loads
+      });
+    }));
+  }
+
+  // The interpreter is ~4.4 MB and this page is here to be played, so it
+  // starts on arrival. The still frame of the title screen stands in until the
+  // first real one arrives, so the space never sits empty.
+  (function start() {
+    var stage = document.getElementById("game");
+    var frame = document.createElement("iframe");
+    frame.title = "Lunar Lander, running in the culebra Playground";
+    frame.src = "./playground/?embed=1&view=canvas&run=1&example=" +
+      encodeURIComponent("Canvas: Lunar Lander");
+    // Poll rather than trust one event: whichever of load, the first frame or
+    // a tick gets there first, the pane is wired exactly once.
+    var polling = setInterval(function () {
+      if (adoptFrame(frame)) clearInterval(polling);
+    }, 100);
+    setTimeout(function () { clearInterval(polling); }, 60000);
+    frame.addEventListener("load", function () { adoptFrame(frame); });
+    // The stand-ins cover the frame until the game is actually drawing.
+    window.addEventListener("message", function onFirstFrame(e) {
+      if (e.source !== frame.contentWindow) return;
+      if (!e.data || e.data.type !== "culebra-canvas-first-frame") return;
+      window.removeEventListener("message", onFirstFrame);
+      stage.querySelectorAll("img, .loading").forEach(function (el) {
+        el.remove();
+      });
+      // The pane exists by now even if the load event fired early.
+      adoptFrame(frame);
+    });
+    freshenGame().then(function () {
+      stage.appendChild(frame);
+    });
+  })();
+</script>
+</body>
+</html>

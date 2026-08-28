@@ -1,0 +1,149 @@
+# Ship, a port of ship.py from aayala4's Lunar-Lander-Python
+# (github.com/aayala4/Lunar-Lander-Python), GPL-3.0. See LICENSE.
+#
+# The lander is a circular hull with two legs. Everything is drawn and
+# collided from polar offsets around (x, y): the legs sit at the hull angle
+# +/- 30 degrees, and the exhaust plume grows straight out the back with the
+# throttle.
+
+# What a frame's collision test found under the ship.
+enum Hit {
+  Clear,
+  Crash,
+  Touchdown,
+}
+
+let WHITE = Canvas.rgba(255, 255, 255)
+
+let PI = 3.1415926  # the original's PI, kept so the trajectories match
+
+let HULL = 6.0      # hull radius
+let LEG_END = 12.0  # drawn leg length
+let FOOT = 11.0     # the leg point that counts as a foot
+let LEG_SPREAD = PI / 6.0
+
+let MAX_THROTTLE = 8
+let BURN_RATE = 0.08  # fuel per throttle step per frame
+
+class Ship {
+  x = 0.0
+  y = 0.0
+  xvel = 0.0
+  yvel = 0.0
+  ang = 0.0
+  gas = 750.0
+  throttle = 0
+  # Hitbox points, rebuilt each frame by `hitbox`.
+  body = []
+  leg1 = []
+  leg2 = []
+  foot1 = [0, 0]
+  foot2 = [0, 0]
+
+  new() {}
+
+  # The start-of-life state: high on the left, drifting right.
+  spawn() {
+    self.x = 100.0
+    self.y = 100.0
+    self.xvel = 50.0
+    self.yvel = 0.0
+    self.ang = 0.0
+    self.throttle = 0
+  }
+
+  set_gas(g) {
+    self.gas = Math.max(g, 0.0)
+  }
+
+  # The hull points away from the ground, so the angle is clamped to the upper
+  # half turn.
+  rotate(ang) {
+    self.ang = Math.clamp(ang, -PI, 0.0)
+  }
+
+  # Thrust along the hull axis, and the fuel it costs. The horizontal and
+  # vertical components use different constants, as in the original.
+  accelerate() {
+    self.xvel += 0.09 * self.throttle * Math.cos(self.ang)
+    self.yvel += 0.175 * self.throttle * Math.sin(self.ang)
+    self.set_gas(self.gas - BURN_RATE * self.throttle)
+  }
+
+  # Step the throttle by `delta`, within 0..MAX_THROTTLE. An empty tank cuts it.
+  throttle_by(delta) {
+    self.throttle = Math.clamp(self.throttle + delta, 0, MAX_THROTTLE)
+    self.throttle = 0 if self.gas <= 0.0
+  }
+
+  # `dist` px out from the hull centre along `angle`.
+  at(dist, angle) {
+    Vector2.new(
+      self.x - dist * Math.cos(angle),
+      self.y - dist * Math.sin(angle),
+    )
+  }
+
+  # The same point, snapped to a pixel, for the hitbox.
+  point(dist, angle) {
+    let v = self.at(dist, angle)
+    [Math.round(v.x), Math.round(v.y)]
+  }
+
+  draw() {
+    let a1 = self.ang + LEG_SPREAD
+    let a2 = self.ang - LEG_SPREAD
+    self.leg(a1)
+    self.leg(a2)
+    if self.throttle > 0 {
+      # The plume runs from each leg root to a point behind the hull that
+      # lengthens with the throttle.
+      let tip = self.at(HULL + 2.0 * self.throttle, self.ang)
+      self.plume(a1, tip)
+      self.plume(a2, tip)
+    }
+    Canvas.circle(self.x, self.y, HULL, WHITE, fill: false)
+  }
+
+  leg(angle) {
+    Canvas.line(self.at(HULL, angle), self.at(LEG_END, angle), WHITE)
+  }
+
+  plume(angle, tip) {
+    Canvas.line(self.at(HULL, angle), tip, WHITE)
+  }
+
+  # Rebuild the hitbox: a ring of points around the hull, the two legs, and the
+  # single point at the tip of each leg that counts as a foot.
+  hitbox() {
+    let a1 = self.ang + LEG_SPREAD
+    let a2 = self.ang - LEG_SPREAD
+    self.body = iota(26).map(|k| self.point(HULL, 0.25 * k))
+    self.leg1 = iota(6, 11).map(|d| self.point(to_float(d), a1))
+    self.leg2 = iota(6, 11).map(|d| self.point(to_float(d), a2))
+    self.foot1 = self.point(FOOT, a1)
+    self.foot2 = self.point(FOOT, a2)
+  }
+
+  # Order matters: hull first, then the feet, then the legs. Touching down on
+  # a leg is a crash, but only once neither foot pairing has claimed the frame.
+  collision(terrain) {
+    # The hull has to be strictly below the ground; a foot resting exactly on
+    # it counts as down.
+    let buried = |[px, py]| self.under(terrain, px, py, touching: false)
+    let down = |[px, py]| self.under(terrain, px, py, touching: true)
+    return Hit.Crash if self.body.any(buried)
+    return Hit.Touchdown if down(self.foot1) && down(self.foot2)
+    return Hit.Crash if self.leg1.any(down) || self.leg2.any(down)
+    Hit.Clear
+  }
+
+  # Whether hitbox point (px, py) has reached the ground beneath it.
+  under(terrain, px, py, *, touching) {
+    let top = terrain.top_near(px)
+    return false if top == nil
+    touching ? py >= top : py > top
+  }
+}
+
+export {Ship, Hit}

@@ -1,0 +1,21 @@
+{
+  "categories": [
+    {
+      "name": "Game",
+      "examples": [
+        {
+          "title": "Canvas: Lunar Lander",
+          "path": "lunar-lander/lunar_lander.cul",
+          "assets": [
+            "lunar-lander/ship.cul",
+            "lunar-lander/terrain.cul",
+            "lunar-lander/assets/explosion.ogg",
+            "lunar-lander/assets/rocket_thrust.ogg",
+            "lunar-lander/assets/NovaSquare.ttf",
+            "lunar-lander/assets/NovaSquare-OFL.txt"
+          ]
+        }
+      ]
+    }
+  ]
+}

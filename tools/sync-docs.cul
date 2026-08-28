@@ -1,0 +1,84 @@
+# Mirror the game into docs/playground/ so GitHub Pages can run it.
+#
+# The playground itself (index.html, app.js, worker.js and the two wasm
+# builds) is vendored from culebra's own built site and only changes when it
+# is re-vendored. Its page also loads docs/assets/brand.css, which comes from
+# that same site, sits outside the vendored tree and has to be re-vendored
+# with it; the favicon it shipped pointing at was inlined instead, and that
+# edit has to be re-applied. What this regenerates is the copy of the game
+# that page loads: examples.json names every file once, and the copy is driven
+# off that list, so the page cannot serve a stale module or miss an asset.
+#
+#   culebra tools/sync-docs.cul          # refresh the copy
+#   culebra tools/sync-docs.cul --check  # exit 1 if it is stale, write nothing
+
+let root = FS.dirname(FS.dirname(Sys.script))
+let site = FS.join(root, "docs", "playground")
+let catalog = FS.join(site, "examples.json")
+
+# Each entry is served from `docs/playground/lunar-lander/<rel>` and lives in
+# the repository at `<rel>`, so one list drives both ends.
+let PREFIX = "lunar-lander/"
+
+let args = Args.parse(
+  Sys.argv,
+  {
+    name: "sync-docs",
+    doc: "mirror the game into docs/playground/",
+    args: [{
+      name: "check",
+      type: "Bool",
+      default: false,
+      doc: "report staleness instead of fixing it",
+    }],
+  },
+)
+
+let listed = fn () {
+  let cat = JSON.parse(FS.read(catalog))
+  cat.categories.flat_map(|c| c.examples.flat_map(|e| [
+    e.path,
+    ...(e.assets ?? []),
+  ]))
+}
+
+let bullets = fn (xs) {
+  println(xs.map(|x| "  {x}").join("\n"))
+}
+
+mut stale = []
+mut missing = []
+
+for rel in listed() {
+  throw "examples.json entry outside {PREFIX}: {rel}" unless rel.starts_with(PREFIX)
+  let src = FS.join(root, rel.strip_prefix(PREFIX))
+  let dst = FS.join(site, rel)
+  if !FS.exists(src) {
+    missing.push(src)
+    continue
+  }
+  let want = FS.read(src)
+  continue if FS.exists(dst) && FS.read(dst) == want
+  stale.push(rel)
+  if !args.check {
+    FS.mkdir(FS.dirname(dst))
+    FS.write(dst, want)
+  }
+}
+
+if !missing.empty() {
+  println("examples.json names files that are not in the repository:")
+  bullets(missing)
+  Sys.exit(1)
+}
+
+if stale.empty() {
+  println("docs/playground is up to date")
+} else if args.check {
+  println("docs/playground is stale; run tools/sync-docs.cul:")
+  bullets(stale)
+  Sys.exit(1)
+} else {
+  println("copied {stale.size()} file(s) into docs/playground:")
+  bullets(stale)
+}

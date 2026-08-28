@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>culebra Playground v0.4.0</title>
+  <meta name="description" content="Run culebra in your browser — the interpreter compiled to WebAssembly.">
+  <!-- Inlined rather than fetched: this page is vendored, and the icon it
+       shipped with pointed one directory up, outside the vendored tree, so
+       it was the one asset a re-vendor kept missing. A lander rather than
+       culebra's own mark, since this copy only ever serves the game: a
+       descent stage on two splayed legs, echoing the round hull and two legs
+       ship.cul draws. Re-apply this after a re-vendor. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='1.6 2.1 20.8 20.8'><style>:root { color: %231590c4 } @media (prefers-color-scheme: dark) { :root { color: %2345b8ee } }</style><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M8 4.5h8l2 4.5-2 4.5H8L6 9z'/><path d='M8.5 13.5 5 20M15.5 13.5 19 20'/><path d='M3 20.5h4M17 20.5h4'/></g></svg>">
+  <link rel="stylesheet" href="../assets/brand.css">
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="https://esm.sh/@xterm/xterm@5.5.0/css/xterm.css">
+  <script>
+    // ?embed=1 drops the chrome a hosting page already provides. Marked on the
+    // root element from <head>, before the body is parsed, so an embed never
+    // paints the standalone header and then takes it away.
+    if (new URLSearchParams(location.search).get("embed") === "1")
+      document.documentElement.classList.add("embed");
+    // ?view=canvas is for a host that wants only the running game — a
+    // poster-and-play-button embed with no source, controls, or other panes
+    // to distract from it. See the styles.css "canvas-only mode" block.
+    if (new URLSearchParams(location.search).get("view") === "canvas")
+      document.documentElement.classList.add("canvas-only");
+  </script>
+</head>
+<body>
+  <header class="pg-header">
+    <div class="brand">
+      <a class="wordmark" href="../" aria-label="culebra home">
+        <svg class="mark" width="24" height="24" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+          <path d="M13 15C13 12 13.5 9 14 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <path d="M14 6C15 2 18 1 19 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <path d="M14 6C16.2 5.4 18.5 6 19 8.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <path d="M14 6C13 2 10 1 9 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <path d="M14 6C11.8 5.4 9.5 6 9 8.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <path d="M2 15.5c1.5-2 3.5-2 5 0s3.5 2 5 0 3.5-2 5 0 3.5 2 5 0"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>
+          <path d="M2 20c1.5-2 3.5-2 5 0s3.5 2 5 0 3.5-2 5 0 3.5 2 5 0"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.5"/>
+        </svg>
+        culebra
+      </a>
+      <span class="sub">Playground v0.4.0</span>
+    </div>
+    <nav>
+      <a href="https://github.com/yhirose/culebra/tree/master/docs">Docs</a>
+      <a href="https://github.com/yhirose/culebra">Repository</a>
+    </nav>
+  </header>
+
+  <div class="pg-toolbar">
+    <button id="run" class="btn btn-primary" disabled>Run</button>
+    <button id="stop" class="btn" disabled>Stop</button>
+    <select id="example-category" class="example-select" aria-label="Example category">
+      <option value="">Examples…</option>
+    </select>
+    <select id="example-item" class="example-select" aria-label="Load an example" disabled>
+      <option value="">…</option>
+    </select>
+    <input id="args" type="text" spellcheck="false" autocomplete="off"
+           placeholder="arguments → Sys.argv" aria-label="Command-line arguments">
+    <span class="spacer"></span>
+    <span id="backend" class="backend"></span>
+    <span id="status" class="status">loading…</span>
+  </div>
+
+  <main class="pg-main">
+    <div id="editor" class="pg-editor"></div>
+    <div class="pg-right">
+      <div class="pg-tabs" role="tablist">
+        <button id="tab-output" class="pg-tab active" data-pane="output" role="tab" aria-selected="true">Output</button>
+        <button id="tab-tui" class="pg-tab" data-pane="tui" role="tab" aria-selected="false">TUI</button>
+        <button id="tab-canvas" class="pg-tab" data-pane="canvas" role="tab" aria-selected="false">Canvas</button>
+        <span class="spacer"></span>
+        <button id="clear" class="pg-tab-action">Clear</button>
+      </div>
+      <div class="pg-panes">
+        <pre id="output" class="pg-output pg-pane active"><span class="placeholder">Output appears here. Press Run.</span></pre>
+        <div id="tui" class="pg-tui pg-pane"></div>
+        <div id="canvas-pane" class="pg-canvas pg-pane" tabindex="0">
+          <!-- #game is the framebuffer at its own low resolution, stretched by
+               CSS with pixelated (nearest) sampling; #game-text is the screen
+               layer over it at the size it is actually displayed at, so
+               Font.draw_screen's antialiased edges are not magnified into
+               blocks. The stack keeps them exactly co-extensive. -->
+          <div id="canvas-stack" class="pg-canvas-stack">
+            <canvas id="game" width="160" height="160"></canvas>
+            <canvas id="game-text" class="pg-canvas-overlay"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    try {
+      var t = localStorage.getItem("culebra-theme");
+      if (t) document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
