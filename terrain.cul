@@ -1,0 +1,168 @@
+# Terrain, a port of terrain.py from aayala4's Lunar-Lander-Python
+# (github.com/aayala4/Lunar-Lander-Python), GPL-3.0. See LICENSE.
+#
+# The ground is midpoint displacement: a flat line at 4/5 of the screen
+# height, subdivided six times with a shrinking random offset. Four landing
+# pads are then flattened into it, each worth a score multiplier.
+
+let WHITE = Canvas.rgba(255, 255, 255)
+let LABEL = 2  # bitmap-font scale for the "5x" pad labels
+
+let START_DISPLACEMENT = 450.0  # the original's first midpoint offset
+
+let SPOTS = 4           # pads per terrain
+let MIN_CLEARANCE = 25  # px the ground keeps from the bottom of the screen
+
+# The original drew from Python's randint(0, 32767) % n, so keep the modulus.
+let rand = |n| Random.int(0, 32768) % n
+
+# No terrain in this column. Larger than any y the generator can produce.
+let NO_TERRAIN = 1000000
+
+class Terrain {
+  # The polyline the terrain is drawn from.
+  xs = []
+  ys = []
+  # One entry per landing pad: {index, length, value} into xs / ys.
+  spots = []
+  # Topmost terrain y per integer x column. See `top_near`.
+  top = []
+
+  new(width, height) {
+    self.width = width
+    self.height = height
+  }
+
+  # Rebuild the whole terrain. The original recursed seven times from a
+  # displacement of 450, subdividing on iterations 2..7, which is these six
+  # rounds; the base case did the two calls at the end.
+  generate() {
+    self.xs = [0.0, to_float(self.width)]
+    self.ys = [4.0 / 5.0 * self.height, 4.0 / 5.0 * self.height]
+    mut d = START_DISPLACEMENT * 2.0 / 3.0
+    for _ in 0..6 {
+      self.subdivide(d)
+      d *= 2.0 / 3.0
+    }
+    self.place_spots()
+    self.build_points()
+  }
+
+  # Split every segment, offsetting each new midpoint by up to +/- half the
+  # displacement.
+  subdivide(displacement) {
+    mut nx = []
+    mut ny = []
+    let floor = to_float(self.height - MIN_CLEARANCE)
+    for i in 1..self.xs.size() {
+      let mid = (self.ys[i] + self.ys[i - 1]) / 2.0 +
+        Random.uniform(0.0, 1.0) * displacement -
+        displacement / 2.0
+      let midy = Math.min(mid, floor)
+      nx.push(self.xs[i - 1])
+      ny.push(self.ys[i - 1])
+      nx.push((self.xs[i] + self.xs[i - 1]) / 2.0)
+      ny.push(midy)
+    }
+    nx.push(self.xs[self.xs.size() - 1])
+    ny.push(self.ys[self.ys.size() - 1])
+    self.xs = nx
+    self.ys = ny
+  }
+
+  # Place `SPOTS` landing pads and flatten the ground under each.
+  place_spots() {
+    self.spots = []
+    for _ in 0..SPOTS {
+      mut length = rand(4) + 2
+      mut place = rand(self.xs.size() - 4)
+      while self.overlaps(place, length) {
+        length = rand(4) + 2
+        place = rand(self.xs.size() - 5)
+      }
+      # The narrower the pad, the more it is worth: length 2..5 pays 5..2.
+      self.spots.push({index: place, length: length, value: 7 - length})
+      for j in 0..length {
+        self.ys[place + j] = self.ys[place]
+      }
+    }
+  }
+
+  # Whether a candidate pad lands on one already placed. The original compares
+  # the candidate against the first N points of each placed pad, where N is the
+  # number of pads placed so far rather than that pad's own length; kept as-is
+  # so the layouts come out the same.
+  overlaps(place, length) {
+    let n = self.spots.size()
+    iota(n).any(|k| iota(n).any(|l| iota(length).any(|m| self.xs[place + m] ==
+      self.xs[self.spots[k].index + l])))
+  }
+
+  # Walk each segment one x pixel at a time, accumulating the slope, to get the
+  # per-pixel ground the ship collides against. Only the topmost point of each
+  # column can ever be hit, so that is all `top` keeps.
+  build_points() {
+    self.top = repeat(self.width + 1, NO_TERRAIN)
+    for i in 1..self.xs.size() {
+      let slope = (self.ys[i] - self.ys[i - 1]) / (self.xs[i] - self.xs[i - 1])
+      mut y = self.ys[i - 1]
+      mut j = self.xs[i - 1]
+      while true {
+        y += slope
+        let col = Math.round(j)
+        let py = Math.round(y)
+        if col >= 0 && col <= self.width && py < self.top[col] {
+          self.top[col] = py
+        }
+        break if j >= self.xs[i]
+        j += 1.0
+      }
+    }
+  }
+
+  # The highest ground within one pixel of column `x`, or nil where there is
+  # none. The ship's hitbox matches any terrain point with |dx| < 2.
+  top_near(x) {
+    return nil if x < -1 || x > self.width + 1
+    let lo = Math.max(x - 1, 0)
+    let hi = Math.min(x + 1, self.width)
+    mut best = NO_TERRAIN
+    for c in lo..=hi {
+      best = self.top[c] if self.top[c] < best
+    }
+    best == NO_TERRAIN ? nil : best
+  }
+
+  # The x span of pad `s`, from its first draw point to its last.
+  span(s) {
+    (self.xs[s.index], self.xs[s.index + s.length - 1])
+  }
+
+  # The multiplier for a landing at `x`, or 1 away from a pad.
+  multiplier_at(x) {
+    let hit = self.spots.find(fn (s) {
+      let (x1, x2) = self.span(s)
+      x >= x1 && x <= x2
+    })
+    hit == nil ? 1 : hit.value
+  }
+
+  draw() {
+    for i in 1..self.xs.size() {
+      Canvas.line(self.xs[i - 1], self.ys[i - 1], self.xs[i], self.ys[i], WHITE)
+    }
+    for s in self.spots {
+      let (x1, x2) = self.span(s)
+      let y = self.ys[s.index]
+      # A pad is marked by a double line just above the ground, and labelled
+      # below it.
+      Canvas.line(x1, y - 1, x2, y - 1, WHITE)
+      Canvas.line(x1, y - 2, x2, y - 2, WHITE)
+      let label = "{s.value}x"
+      let cx = Math.round((x1 + x2) / 2.0) - Canvas.text_width(label, LABEL) / 2
+      Canvas.text(label, cx, Math.round(y) + 15, WHITE, LABEL)
+    }
+  }
+}
+
+export {Terrain}

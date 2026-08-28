@@ -1,0 +1,175 @@
+# Checks on the two ported modules: the shape of a generated terrain, the
+# landing pads, and each verdict Ship.collision can return.
+#
+#   culebra test
+
+import lander from './ship.cul'
+import land from './terrain.cul'
+
+let WIDTH = 1400
+let HEIGHT = 800
+let PI = 3.1415926
+let UPRIGHT = -PI / 2.0  # the hull angle that puts both feet underneath
+
+let fresh = fn (seed) {
+  Random.seed(seed)
+  let t = land.Terrain(WIDTH, HEIGHT)
+  t.generate()
+  t
+}
+
+# A ship standing on the pad `spot`, both feet just touching the ground.
+let on_pad = fn (t, spot) {
+  let s = lander.Ship()
+  s.ang = UPRIGHT
+  let (x1, x2) = t.span(spot)
+  s.x = (x1 + x2) / 2.0
+  s.y = t.ys[spot.index] - 11.0 * Math.sin(PI / 3.0)
+  s.hitbox()
+  s
+}
+
+@test
+fn terrain_is_six_subdivisions_wide() {
+  let t = fresh(1)
+  # Two endpoints doubled six times: 2, 3, 5, 9, 17, 33, 65.
+  assert_eq(t.xs.size(), 65)
+  assert_eq(t.ys.size(), 65)
+  assert_eq(t.xs[0], 0.0)
+  assert_eq(t.xs[64], to_float(WIDTH))
+}
+
+@test
+fn terrain_keeps_clear_of_the_bottom() {
+  for seed in 1..6 {
+    let t = fresh(seed)
+    assert_true(t.ys.all(|y| y <= to_float(HEIGHT - 25)))
+  }
+}
+
+@test
+fn every_column_has_ground() {
+  let t = fresh(2)
+  assert_true(range(WIDTH + 1).all(|x| t.top_near(x) != nil))
+  assert_eq(t.top_near(-2), nil)
+  assert_eq(t.top_near(WIDTH + 2), nil)
+}
+
+@test
+fn pads_are_flat_and_pay_out() {
+  let t = fresh(3)
+  assert_eq(t.spots.size(), 4)
+  for s in t.spots {
+    assert_true(s.length >= 2 && s.length <= 5)
+    assert_eq(s.value, 7 - s.length)
+    # Every draw point across a pad sits at the same height.
+    assert_true(range(s.length).all(|j| t.ys[s.index + j] == t.ys[s.index]))
+    let (x1, x2) = t.span(s)
+    let mid = (x1 + x2) / 2.0
+    assert_eq(t.multiplier_at(mid), s.value)
+  }
+}
+
+@test
+fn away_from_a_pad_pays_single() {
+  let t = fresh(4)
+  let on_a_pad = fn (v) {
+    t.spots.any(fn (s) {
+      let (x1, x2) = t.span(s)
+      v >= x1 && v <= x2
+    })
+  }
+  let clear_x = range(WIDTH).map(to_float).find(|v| !on_a_pad(v))
+  assert_eq(t.multiplier_at(clear_x), 1)
+}
+
+@test
+fn hitbox_covers_hull_legs_and_feet() {
+  let s = lander.Ship()
+  s.x = 200.0
+  s.y = 200.0
+  s.ang = UPRIGHT
+  s.hitbox()
+  assert_eq(s.body.size(), 26)
+  assert_eq(s.leg1.size(), 5)
+  assert_eq(s.leg2.size(), 5)
+  # Upright, the feet straddle the hull and sit below it.
+  assert_true(s.foot1[0] < s.foot2[0])
+  assert_true(s.foot1[1] > s.body.map(|p| p[1]).max())
+}
+
+@test
+fn clear_air_is_no_collision() {
+  let t = fresh(5)
+  let s = lander.Ship()
+  s.x = 700.0
+  s.y = 100.0
+  s.ang = UPRIGHT
+  s.hitbox()
+  assert_eq(s.collision(t), lander.Hit.Clear)
+}
+
+@test
+fn both_feet_down_is_a_landing() {
+  let t = fresh(5)
+  for spot in t.spots {
+    assert_eq(on_pad(t, spot).collision(t), lander.Hit.Touchdown)
+  }
+}
+
+@test
+fn a_buried_hull_is_a_crash() {
+  let t = fresh(5)
+  let spot = t.spots[0]
+  let s = on_pad(t, spot)
+  s.y += 20.0
+  s.hitbox()
+  assert_eq(s.collision(t), lander.Hit.Crash)
+}
+
+@test
+fn a_leg_down_alone_is_a_crash() {
+  let t = fresh(5)
+  let spot = t.spots[0]
+  let s = on_pad(t, spot)
+  # Tipped over far enough that one leg reaches the ground and one foot does
+  # not, which the original scores as a crash rather than a landing.
+  s.ang = UPRIGHT + PI / 5.0
+  s.y += 3.0
+  s.hitbox()
+  assert_eq(s.collision(t), lander.Hit.Crash)
+}
+
+@test
+fn throttle_burns_fuel_and_stays_in_range() {
+  let s = lander.Ship()
+  s.ang = UPRIGHT
+  s.set_gas(750.0)
+  for _ in 0..20 {
+    s.throttle_by(1)
+  }
+  assert_eq(s.throttle, 8)
+  for _ in 0..20 {
+    s.throttle_by(-1)
+  }
+  assert_eq(s.throttle, 0)
+  s.throttle_by(1)
+  s.accelerate()
+  assert_close(s.gas, 749.92, 1e-9)
+  assert_close(s.yvel, -0.175, 1e-9)
+  # An empty tank cuts the engine.
+  s.set_gas(0.0)
+  s.throttle_by(1)
+  assert_eq(s.throttle, 0)
+}
+
+@test
+fn rotation_stays_in_the_upper_half_turn() {
+  let s = lander.Ship()
+  s.rotate(1.0)
+  assert_eq(s.ang, 0.0)
+  s.rotate(-4.0)
+  assert_close(s.ang, -PI, 1e-9)
+  s.rotate(-1.0)
+  assert_close(s.ang, -1.0, 1e-9)
+}

@@ -1,0 +1,379 @@
+# Lunar Lander, a Culebra port of aayala4's Lunar-Lander-Python
+# (github.com/aayala4/Lunar-Lander-Python), GPL-3.0. See LICENSE.
+#
+# The original runs on pgzero (Pygame Zero). This port keeps its 1400x800
+# playfield, its physics constants, its terrain generator and its scoring, and
+# replaces pgzero with Culebra's Canvas: pgzero's draw/update pair becomes one
+# `Canvas.run` tick, its `keyboard.<key>` polling becomes `Canvas.key`, and its
+# `clock.schedule` callbacks become a frame deadline (see `schedule`).
+#
+#   culebra lunar_lander.cul            # play
+#   culebra --jit lunar_lander.cul      # the same, JIT-compiled
+#   culebra lunar_lander.cul demo 1200  # autopilot; writes shot.png of the
+#                                       # last frame, for a machine with no
+#                                       # display (CULEBRA_CANVAS_HEADLESS=1)
+#
+# Left/Right rotate, Up/Down work the throttle, Q returns to the menu, Esc
+# quits.
+
+import lander from './ship.cul'
+import land from './terrain.cul'
+
+let WIDTH = 1400
+let HEIGHT = 800
+let PI = 3.1415926
+let DT = 1.0 / 60.0  # pgzero passed the real frame time; Canvas is vsynced
+
+let UPRIGHT = -PI / 2.0  # the hull angle that puts both feet underneath
+
+let WHITE = Canvas.rgba(255, 255, 255)
+let BLACK = Canvas.rgba(0, 0, 0)
+
+# Bitmap-font scales. The original set point sizes for a TTF that it asked the
+# player to download; the built-in 8x8 font needs no asset.
+let HUD = 2
+let TITLE = 8
+let LINE = 24  # HUD/message line spacing
+
+let START_GAS = 750.0
+let CRASH_COST = 100.0
+let LANDING_BONUS = 50.0
+
+let assets = Embed.dir("assets")
+let explosion = Canvas.Sound.new(assets.read("explosion.ogg"))
+let thrust = assets.read("rocket_thrust.ogg")
+
+let CONTROLS = [
+  "Controls:",
+  "Left and Right Arrows: Rotate Ship",
+  "Up and Down Arrows: Strengthen/Weaken Thrusters",
+  "Q: Quit game",
+]
+let CRASHED = ["YOU CRASHED", "YOU LOST 100 FUEL UNITS"]
+let GOOD_LANDING = ["GOOD LANDING", "50 FUEL UNITS ADDED"]
+let HARD_LANDING = ["HARD LANDING"]
+let NO_FUEL = ["YOU RAN OUT OF FUEL", "GAME OVER"]
+
+# The two HUD columns are inset from their own edge by the same margin, so the
+# right one's x follows from the widths it has to clear. `Canvas.text` advances
+# 8 px per character per unit of scale.
+let HUD_MARGIN = 40
+let LEFT_HUD_X = HUD_MARGIN
+let RIGHT_LABEL_W = 20
+let RIGHT_VALUE_W = 6
+let RIGHT_HUD_X = WIDTH - HUD_MARGIN - (RIGHT_LABEL_W + RIGHT_VALUE_W) * 8 * HUD
+
+let text_centered = fn (s, y, scale) {
+  Canvas.text(s, (WIDTH - Canvas.text_width(s, scale)) / 2, y, WHITE, scale)
+}
+
+# A column of label/value readouts: labels flush left in `label_w` characters,
+# values right-aligned in `value_w` (0 for flush left).
+let stats = fn (x, rows, label_w, value_w) {
+  for i, (label, value) in rows.enumerate() {
+    let text = "{label:<{label_w}}{value:>{value_w}}"
+    Canvas.text(text, x, 40 + i * LINE, WHITE, HUD)
+  }
+}
+
+let block_centered = fn (lines, y, scale) {
+  for i, line in lines.enumerate() {
+    text_centered(line, y + i * LINE, scale)
+  }
+}
+
+enum Mode {
+  Menu,
+  Playing,
+  Over,
+}
+
+# How the last touchdown was judged.
+enum Landing {
+  Good,
+  Hard,
+  TooFast,
+}
+
+# What the pending deadline does when it comes due.
+enum Timer {
+  NextLife,
+  ToMenu,
+}
+
+class Game {
+  ship = lander.Ship()
+  terrain = land.Terrain(WIDTH, HEIGHT)
+  mode = Mode.Menu
+  score = 0
+  multiplier = 1
+  collided = lander.Hit.Clear
+  landing: Landing  # only meaningful once a touchdown has set it
+  playing = true
+  thrusting = false
+  fc = 0
+  pending = nil  # (Timer, frame it is due)
+  demo = false
+
+  new(demo) {
+    self.demo = demo
+  }
+
+  start_game() {
+    self.mode = Mode.Playing
+    self.score = 0
+    self.ship.set_gas(START_GAS)
+    self.next_life()
+  }
+
+  # A new life on the same tank of fuel, over freshly generated ground.
+  next_life() {
+    self.ship.spawn()
+    self.terrain.generate()
+    self.collided = lander.Hit.Clear
+    self.multiplier = 1
+    self.playing = true
+  }
+
+  to_menu() {
+    self.mode = Mode.Menu
+    self.pending = nil
+  }
+
+  out_of_fuel() {
+    self.mode = Mode.Over
+    self.playing = false
+  }
+
+  # pgzero scheduled the between-lives pauses with clock.schedule; against a
+  # vsynced loop a frame deadline does the same job. Only one can be pending,
+  # which is what the original's resetScheduled flag enforced. The callers are
+  # the draw_* methods rather than the transitions, because the mode being
+  # drawn is what decides which timer to arm: a crash that also empties the
+  # tank runs crashed() and out_of_fuel() on the same frame, and it is the
+  # game-over return that has to win.
+  schedule(timer, seconds) {
+    let due = self.fc + Math.round(seconds * 60.0)
+    self.pending = (timer, due) if self.pending == nil
+  }
+
+  fire_due() {
+    return if self.pending == nil
+    let (timer, due) = self.pending
+    return if self.fc < due
+    self.pending = nil
+    match timer {
+      t: NextLife => self.next_life(),
+      t: ToMenu => self.to_menu(),
+    }
+  }
+
+  tick() {
+    self.fc += 1
+    self.fire_due()
+    match self.mode {
+      m: Menu => {
+        # The demo lingers on the title screen, then presses P itself.
+        self.start_game() if Canvas.key("p") || self.demo && self.fc > 60
+      },
+      m: Playing => self.update_play(),
+      m: Over => nil,
+    }
+    self.sync_thrust()
+    self.draw()
+    true
+  }
+
+  update_play() {
+    return if !self.playing
+    let s = self.ship
+
+    s.y += s.yvel * DT + 0.5 * 30.0 * DT * DT
+    s.x += s.xvel * DT
+
+    # Off one edge of the screen and back in on the other.
+    s.x = cond {
+      s.x > WIDTH + 10 => -10.0,
+      s.x < -10 => to_float(WIDTH + 10),
+      _ => s.x,
+    }
+
+    # Too high to be flying: back to the spawn point.
+    s.spawn() if s.y < -50.0
+
+    s.xvel = Math.clamp(s.xvel, -100.0, 100.0)
+    s.yvel += 10.0 * DT  # gravity
+    s.accelerate()
+
+    self.demo ? self.autopilot() : self.controls()
+    return if self.mode != Mode.Playing
+
+    s.hitbox()
+    self.collided = s.collision(self.terrain)
+    match self.collided {
+      h: Crash => self.crashed(),
+      h: Touchdown => self.touched_down(),
+      _ => nil,
+    }
+
+    self.out_of_fuel() if s.gas <= 0.0
+  }
+
+  # One key acts per frame, in the original's order of precedence.
+  controls() {
+    let s = self.ship
+    cond {
+      Canvas.key("left") => s.rotate(s.ang - PI / 14.0),
+      Canvas.key("right") => s.rotate(s.ang + PI / 14.0),
+      Canvas.key("down") => s.throttle_by(-1),
+      Canvas.key("up") => s.throttle_by(1),
+      Canvas.key("q") => self.to_menu(),
+      _ => nil,
+    }
+  }
+
+  # Enough of a pilot to fly the demo: tilt into the drift until the
+  # horizontal speed is inside the landing tolerance, level off, and ride a
+  # descent rate that eases as the ground comes up. One action per frame, like
+  # the keyboard.
+  autopilot() {
+    let s = self.ship
+    # Clearance over the ground actually below the ship, not the HUD's
+    # altitude, because the terrain has peaks to fly into.
+    let ground = self.terrain.top_near(Math.round(s.x)) ?? HEIGHT
+    let clearance = to_float(ground) - s.y
+    let tilt = clearance > 150.0 ? 0.6 : 0.25
+    let want_ang = cond {
+      s.xvel > 5.0 => UPRIGHT - tilt,
+      s.xvel < -5.0 => UPRIGHT + tilt,
+      _ => UPRIGHT,
+    }
+    let want_vel = Math.clamp(clearance * 0.35, 10.0, 60.0)
+    # The deadband is a full rotation step, or the hull hunts either side of
+    # `want_ang` forever and never gets a frame to work the throttle.
+    let step = PI / 14.0
+    cond {
+      s.ang - want_ang > step => s.rotate(s.ang - step),
+      want_ang - s.ang > step => s.rotate(s.ang + step),
+      s.yvel > want_vel => s.throttle_by(1),
+      s.yvel < want_vel - 3.0 => s.throttle_by(-1),
+      _ => nil,
+    }
+  }
+
+  crashed() {
+    self.playing = false
+    self.score += 5
+    self.ship.set_gas(self.ship.gas - CRASH_COST)
+    explosion.play()
+  }
+
+  # Both feet are on the ground. Whether that counts as a landing is down to
+  # how fast the ship was still moving.
+  touched_down() {
+    let s = self.ship
+    self.playing = false
+    self.multiplier = self.terrain.multiplier_at(s.x)
+    cond {
+      s.yvel < 12.0 && Math.abs(s.xvel) < 25.0 => {
+        self.landing = Landing.Good
+        s.set_gas(s.gas + LANDING_BONUS)
+        self.score += self.multiplier * 50
+      },
+      s.yvel < 25.0 && Math.abs(s.xvel) < 25.0 => {
+        self.landing = Landing.Hard
+        self.score += self.multiplier * 15
+      },
+      _ => {
+        self.landing = Landing.TooFast
+        self.score += 5
+        s.set_gas(s.gas - CRASH_COST)
+        explosion.play()
+      },
+    }
+  }
+
+  # The original started the looping thrust sample on every throttle-up and
+  # stopped it at each of the half-dozen places the engine could cut out; one
+  # call a frame keeps the looping music slot in step with the throttle
+  # instead.
+  sync_thrust() {
+    let on = self.mode == Mode.Playing && self.playing && self.ship.throttle > 0
+    return if on == self.thrusting
+    self.thrusting = on
+    on ? Canvas.music(thrust, loop: true) : Canvas.music_stop()
+  }
+
+  draw() {
+    Canvas.clear(BLACK)
+    match self.mode {
+      m: Menu => self.draw_menu(),
+      m: Playing => self.draw_play(),
+      m: Over => self.draw_over(),
+    }
+  }
+
+  draw_menu() {
+    text_centered("LUNAR LANDER", HEIGHT / 2 - 60, TITLE)
+    text_centered("Press P to play", HEIGHT / 2 + 50, HUD)
+    block_centered(CONTROLS, HEIGHT / 2 + 120, HUD)
+  }
+
+  draw_play() {
+    self.draw_world()
+    return if self.collided == lander.Hit.Clear
+
+    # The outcome stays on screen for four seconds, then the next life starts.
+    let message = cond {
+      self.collided == lander.Hit.Crash => CRASHED,
+      self.landing == Landing.Good => GOOD_LANDING,
+      self.landing == Landing.Hard => HARD_LANDING,
+      _ => CRASHED,
+    }
+    block_centered(message, HEIGHT / 2 - 30, HUD)
+    self.schedule(Timer.NextLife, 4.0)
+  }
+
+  draw_over() {
+    self.draw_world()
+    block_centered(NO_FUEL, HEIGHT / 2 - 30, HUD)
+    self.schedule(Timer.ToMenu, 5.0)
+  }
+
+  draw_world() {
+    self.ship.draw()
+    self.terrain.draw()
+    let s = self.ship
+    stats(
+      LEFT_HUD_X,
+      [("SCORE", self.score), ("FUEL", to_long(s.gas))],
+      label_w: 9,
+      value_w: 0,
+    )
+    # Vertical speed reads as a rate of climb, so a descent shows negative.
+    stats(
+      RIGHT_HUD_X,
+      [
+        ("ALTITUDE", to_long(to_float(HEIGHT - 10) - s.y)),
+        ("HORIZONTAL SPEED", to_long(s.xvel)),
+        ("VERTICAL SPEED", to_long(-s.yvel)),
+      ],
+      label_w: RIGHT_LABEL_W,
+      value_w: RIGHT_VALUE_W,
+    )
+  }
+}
+
+let demo = Sys.argv.get(0, "") == "demo"
+let frames = to_long(Sys.argv.get(1, "1200"))
+
+# A demo run is seeded fixed so the same flight comes out every time.
+Random.seed(demo ? 4 : Time.now().unix_nanos())
+let game = Game(demo)
+Canvas.title("Lunar Lander")
+Canvas.run(WIDTH, HEIGHT, game.tick, frames: frames)
+
+if demo {
+  FS.write("shot.png", Canvas.to_png())
+  println("score {game.score}, fuel {to_long(game.ship.gas)} after {game.fc} frames")
+}
