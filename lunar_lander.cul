@@ -13,8 +13,9 @@
 #                                       # last frame, for a machine with no
 #                                       # display (CULEBRA_CANVAS_HEADLESS=1)
 #
-# Left/Right rotate, Up/Down work the throttle, Q returns to the menu, Esc
-# quits.
+# Left/Right rotate, Up/Down work the throttle, Q returns to the menu. From
+# the title screen, Q asks to confirm before quitting (native only -- there
+# is no "quit" on the web, so the Playground build never offers it).
 
 import lander from './ship.cul'
 import land from './terrain.cul'
@@ -80,6 +81,8 @@ let CRASHED = ["YOU CRASHED", "YOU LOST 100 FUEL UNITS"]
 let GOOD_LANDING = ["GOOD LANDING", "50 FUEL UNITS ADDED"]
 let HARD_LANDING = ["HARD LANDING"]
 let NO_FUEL = ["YOU RAN OUT OF FUEL", "GAME OVER"]
+let QUIT_CONFIRM = ["QUIT?", "Q: yes     P: no"]
+let MENU_CONFIRM = ["BACK TO TITLE?", "Q: yes     P: no"]
 
 # The two HUD columns are inset from their own edge by the same margin. The
 # original padded one string with spaces and let the font land the value where
@@ -195,6 +198,8 @@ class Game {
   pressed = []
   pending = nil  # (Timer, frame it is due)
   demo = false
+  confirming_quit = false  # showing "Quit?" over the title screen
+  confirming_menu = false  # showing "Back to title?" over the round in play
 
   new(demo) {
     self.demo = demo
@@ -253,20 +258,76 @@ class Game {
     self.fc += 1
     # Drained here and nowhere else: the queue empties as it is read.
     self.pressed = Canvas.key_queue()
+    # F, from any screen, mirrors the browser build's own F key and Y/Start
+    # gamepad mapping (docs/index.html) -- both routes into the one native
+    # Canvas.toggle_fullscreen() this repo's culebra checkout now carries.
+    if self.pressed.contains("f") || Canvas.pad_pressed(Canvas.PAD_Y) ||
+        Canvas.pad_pressed(Canvas.PAD_START) {
+      Canvas.toggle_fullscreen()
+    }
     self.fire_due()
     match self.mode {
       m: Menu => {
         self.animate_menu_ship()
-        # The demo lingers on the title screen, then presses P itself.
-        self.start_game() if self.pressed.contains("p") ||
-          self.demo && self.fc > 60
+        if self.confirming_quit {
+          self.quit_menu()
+        } else {
+          # The demo lingers on the title screen, then presses P itself.
+          self.start_game() if self.pressed.contains("p") ||
+            Canvas.pad_pressed(Canvas.PAD_A) || self.demo && self.fc > 60
+          # can_quit() is false on the web (no window to close), so Q there
+          # keeps meaning nothing from the title screen, same as today.
+          self.confirming_quit = true if (self.pressed.contains("q") ||
+            Canvas.pad_pressed(Canvas.PAD_B)) && Canvas.can_quit()
+        }
       },
-      m: Playing => self.update_play(),
+      m: Playing => {
+        if self.confirming_menu {
+          self.confirm_menu()
+        } else {
+          self.update_play()
+        }
+      },
       m: Over => nil,
     }
     self.sync_thrust()
     self.draw()
     true
+  }
+
+  # Left stick or D-pad, past the same deadzone the browser build's JS uses
+  # for the same two directions.
+  pad_left() {
+    Canvas.pad_held(Canvas.PAD_LEFT) || Canvas.pad_axis(Canvas.AXIS_LX) < -0.5
+  }
+  pad_right() {
+    Canvas.pad_held(Canvas.PAD_RIGHT) || Canvas.pad_axis(Canvas.AXIS_LX) > 0.5
+  }
+
+  # Q again quits outright; P backs out -- both reuse the meaning they
+  # already carry elsewhere (Q leaves, P proceeds) rather than teaching a
+  # new key just for this prompt.
+  quit_menu() {
+    cond {
+      self.pressed.contains("q") || Canvas.pad_pressed(Canvas.PAD_B) => Canvas.quit(),
+      self.pressed.contains("p") || Canvas.pad_pressed(Canvas.PAD_A) =>
+        self.confirming_quit = false,
+      _ => nil,
+    }
+  }
+
+  # Same shape as quit_menu(), for the "back to the title screen" prompt a
+  # round in progress shows instead of just leaving outright.
+  confirm_menu() {
+    cond {
+      self.pressed.contains("q") || Canvas.pad_pressed(Canvas.PAD_B) => {
+        self.confirming_menu = false
+        self.to_menu()
+      },
+      self.pressed.contains("p") || Canvas.pad_pressed(Canvas.PAD_A) =>
+        self.confirming_menu = false,
+      _ => nil,
+    }
   }
 
   update_play() {
@@ -308,14 +369,25 @@ class Game {
   # and reads a queue that tick() has already drained, so a Q tapped while an
   # arrow is held is dropped rather than deferred to the next frame the way the
   # held-state read it replaced would have been. Pressing it again works.
+  #
+  # hjkl doubles the arrows the way WASD already doubles them natively (see
+  # canvas.cul's KEY_BITS) -- a second d-pad for whichever hand is on the
+  # letters. Named keys read straight off the keyboard here, unlike the
+  # browser build, where hjkl only exists as a page-side rewrite onto the
+  # arrows because the Playground it embeds has no idea what an "h" means.
   controls() {
     let s = self.ship
     cond {
-      Canvas.key("left") => s.rotate(s.ang - PI / 14.0),
-      Canvas.key("right") => s.rotate(s.ang + PI / 14.0),
-      Canvas.key("down") => s.throttle_by(-1),
-      Canvas.key("up") => s.throttle_by(1),
-      self.pressed.contains("q") => self.to_menu(),
+      Canvas.key("left") || Canvas.key("h") || self.pad_left() =>
+        s.rotate(s.ang - PI / 14.0),
+      Canvas.key("right") || Canvas.key("l") || self.pad_right() =>
+        s.rotate(s.ang + PI / 14.0),
+      Canvas.key("down") || Canvas.key("j") || Canvas.pad_held(Canvas.PAD_LB) =>
+        s.throttle_by(-1),
+      Canvas.key("up") || Canvas.key("k") || Canvas.pad_held(Canvas.PAD_RB) =>
+        s.throttle_by(1),
+      self.pressed.contains("q") || Canvas.pad_pressed(Canvas.PAD_B) =>
+        self.confirming_menu = true,
       _ => nil,
     }
   }
@@ -362,6 +434,22 @@ class Game {
     let s = self.ship
     self.playing = false
     self.multiplier = self.terrain.multiplier_at(s.x)
+    # hitbox()'s feet sit at collision's own FOOT radius (11, ship.cul), one
+    # unit short of LEG_END (12) where the legs are actually drawn, and the
+    # discrete step that reached "both feet down" at all has usually carried
+    # the ship a further pixel or more past that -- both together read as
+    # the legs sinking into the ground for the four seconds the landing
+    # message is up. Settle the hull up by however far the deeper drawn leg
+    # tip penetrated, so both come to rest exactly on the surface instead.
+    # (Left uncorrected, this is the original Python port's own look too --
+    # pgzero's tick checked "past the line" the same way, no settling.)
+    let tip1 = s.at(lander.LEG_END, s.ang + lander.LEG_SPREAD)
+    let tip2 = s.at(lander.LEG_END, s.ang - lander.LEG_SPREAD)
+    let sink = Math.max(
+      tip1.y - to_float(self.terrain.top_near(Math.round(tip1.x)) ?? Math.round(tip1.y)),
+      tip2.y - to_float(self.terrain.top_near(Math.round(tip2.x)) ?? Math.round(tip2.y)),
+    )
+    s.y -= sink if sink > 0.0
     cond {
       s.yvel < 12.0 && Math.abs(s.xvel) < 25.0 => {
         self.landing = Landing.Good
@@ -422,6 +510,10 @@ class Game {
   # below HEIGHT / 2, so every y below is that offset less 87, which slides
   # the block up until its own midpoint lands on HEIGHT / 2 instead.
   draw_menu() {
+    if self.confirming_quit {
+      block_centered(QUIT_CONFIRM, HEIGHT / 2 - 15, TEXT)
+      return
+    }
     text_centered("LUNAR LANDER", HEIGHT / 2 - 147, TITLE)
     text_centered("Press P to play", HEIGHT / 2 - 37, TEXT)
     block_centered(CONTROLS, HEIGHT / 2 + 33, TEXT)
@@ -430,6 +522,10 @@ class Game {
 
   draw_play() {
     self.draw_world()
+    if self.confirming_menu {
+      block_centered(MENU_CONFIRM, HEIGHT / 2 - 15, TEXT)
+      return
+    }
     return if self.collided == lander.Hit.Clear
 
     # The outcome stays on screen for four seconds, then the next life starts.

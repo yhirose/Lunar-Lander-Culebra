@@ -146,4 +146,4 @@ class Ship {
   }
 }
 
-export {Ship, Hit}
+export {Ship, Hit, LEG_END, LEG_SPREAD}
