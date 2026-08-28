@@ -120,6 +120,43 @@ let block_centered = fn (lines, y, size) {
   }
 }
 
+# 1D value noise, for the menu ship's hover (below): plain sines drift
+# forever in lockstep and eventually repeat exactly, which reads as
+# mechanical once you watch it a while. This wanders instead. `seed` gives
+# each animated channel (x, y, angle, throttle) its own uncorrelated stream
+# out of the same noise; `x` is time, scaled by the caller to taste.
+#
+# noise_hash hashes lattice point `i` to a pseudo-random float in [-1, 1)
+# with the classic sin-of-a-large-number trick: sin() at these magnitudes is
+# effectively uncorrelated with `i`, and only the fractional part of the
+# result is kept, so consecutive integers hash to unrelated values.
+let noise_hash = fn (seed, i) {
+  let n = to_float(i) * 12.9898 + to_float(seed) * 78.233
+  let s = Math.sin(n) * 43758.5453
+  (s - to_float(Math.floor(s))) * 2.0 - 1.0
+}
+
+# noise1d interpolates between the hashes at the two lattice points either
+# side of `x` with smootherstep easing (6t^5 - 15t^4 + 10t^3), so the
+# result is continuous and flat-tangent at each lattice point instead of
+# kinking there the way a linear blend would.
+let noise1d = fn (seed, x) {
+  let i0 = Math.floor(x)
+  let f = x - to_float(i0)
+  let a = noise_hash(seed, i0)
+  let b = noise_hash(seed, i0 + 1)
+  let t = f * f * f * (f * (f * 6.0 - 15.0) + 10.0)
+  a + (b - a) * t
+}
+
+# Where the menu's idle ship hovers, and how far: a slow drift and bob under
+# the Controls block, well clear of the text now that draw_menu keeps that
+# block centered on HEIGHT / 2.
+let MENU_SHIP_Y = HEIGHT - 140.0
+let MENU_SHIP_DRIFT = 46.0
+let MENU_SHIP_BOB = 16.0
+let MENU_SHIP_TILT = 0.16
+
 enum Mode {
   Menu,
   Playing,
@@ -141,6 +178,7 @@ enum Timer {
 
 class Game {
   ship = lander.Ship()
+  menu_ship = lander.Ship()  # idles on the title screen; never enters play
   terrain = land.Terrain(WIDTH, HEIGHT)
   mode = Mode.Menu
   score = 0
@@ -218,6 +256,7 @@ class Game {
     self.fire_due()
     match self.mode {
       m: Menu => {
+        self.animate_menu_ship()
         # The demo lingers on the title screen, then presses P itself.
         self.start_game() if self.pressed.contains("p") ||
           self.demo && self.fc > 60
@@ -362,10 +401,31 @@ class Game {
     }
   }
 
+  # No physics, just noise1d off the frame counter: a wandering drift and
+  # bob, a slight tilt either way, and a flickering flame so it reads as
+  # hovering under its own thrust rather than just drifting. Each channel
+  # reads its own noise stream (seeds 1-4) at its own speed, so they never
+  # fall into the same rhythm the way sines at unrelated frequencies still
+  # eventually do.
+  animate_menu_ship() {
+    let t = to_float(self.fc) * DT
+    let s = self.menu_ship
+    s.x = WIDTH / 2.0 + noise1d(1, t * 0.25) * MENU_SHIP_DRIFT
+    s.y = MENU_SHIP_Y + noise1d(2, t * 0.35) * MENU_SHIP_BOB
+    s.ang = UPRIGHT + noise1d(3, t * 0.3) * MENU_SHIP_TILT
+    s.throttle = Math.clamp(3 + Math.round(noise1d(4, t * 0.8) * 3.0), 1, 6)
+  }
+
+  # The title, the prompt and the Controls block, together, span from the
+  # title's own top to the last Controls line's bottom -- 294 px at these
+  # sizes and gaps. Drawn at their original offsets that span sits well
+  # below HEIGHT / 2, so every y below is that offset less 87, which slides
+  # the block up until its own midpoint lands on HEIGHT / 2 instead.
   draw_menu() {
-    text_centered("LUNAR LANDER", HEIGHT / 2 - 60, TITLE)
-    text_centered("Press P to play", HEIGHT / 2 + 50, TEXT)
-    block_centered(CONTROLS, HEIGHT / 2 + 120, TEXT)
+    text_centered("LUNAR LANDER", HEIGHT / 2 - 147, TITLE)
+    text_centered("Press P to play", HEIGHT / 2 - 37, TEXT)
+    block_centered(CONTROLS, HEIGHT / 2 + 33, TEXT)
+    self.menu_ship.draw()
   }
 
   draw_play() {

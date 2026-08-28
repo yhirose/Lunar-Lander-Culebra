@@ -12,9 +12,16 @@
      the same mark in culebra's blue. -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='1.6 2.1 20.8 20.8'><style>:root { color: %231a1a1a } @media (prefers-color-scheme: dark) { :root { color: %23e8e8e8 } }</style><g fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M8 4.5h8l2 4.5-2 4.5H8L6 9z'/><path d='M8.5 13.5 5 20M15.5 13.5 19 20'/><path d='M3 20.5h4M17 20.5h4'/></g></svg>">
 <style>
+  /* Same face the game's own HUD is set in; see docs/playground/lunar-lander/lunar_lander.cul. */
+  @font-face {
+    font-family: "Nova Square";
+    src: url("./playground/lunar-lander/assets/NovaSquare.ttf") format("truetype");
+    font-display: swap;
+  }
   :root {
     color-scheme: dark;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --game: "Nova Square", var(--mono);
   }
   * { box-sizing: border-box; }
   body {
@@ -22,16 +29,14 @@
     padding: 3rem 1.25rem 4rem;
     background: #000;
     color: #e8e8e8;
-    font: 15px/1.65 var(--mono);
+    font: 15px/1.65 var(--game);
   }
   main { max-width: 62rem; margin: 0 auto; }
-  h1 {
-    margin: 0 0 .35rem;
-    font-size: clamp(1.6rem, 5vw, 2.6rem);
-    letter-spacing: .16em;
-    font-weight: 700;
+  .tagline {
+    margin: .75rem 0 2.5rem;
+    color: #7c7c7c;
+    font-size: .875rem;
   }
-  .tagline { margin: 0 0 2rem; color: #9a9a9a; }
   .tagline a { color: #9a9a9a; }
   a { color: #e8e8e8; }
   a:hover { color: #fff; }
@@ -43,6 +48,16 @@
     border: 1px solid #2a2a2a;
     background: #000;
     overflow: hidden;
+  }
+  /* Fullscreen (F key, below): explicit width/height so they win over the
+     aspect-ratio above, which would otherwise still cap the box at 7:4 and
+     leave bars the UA didn't put there. The embedded canvas pane letterboxes
+     to the real ratio on its own regardless of the shape it's given. */
+  .game:fullscreen,
+  .game:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    border: 0;
   }
   .game img,
   .game iframe {
@@ -78,15 +93,10 @@
     padding: .75rem;
     border: 1px solid #2a2a2a;
     color: #7ee787;
-    font: 12px/1.5 var(--mono);
+    font: 12px/1.5 var(--mono);  /* a technical log, kept in plain monospace */
     white-space: pre-wrap;
     max-height: 18rem;
     overflow: auto;
-  }
-  .hint {
-    margin: .75rem 0 2.5rem;
-    color: #7c7c7c;
-    font-size: .875rem;
   }
   h2 {
     margin: 2.5rem 0 .75rem;
@@ -109,25 +119,33 @@
 </head>
 <body>
 <main>
-  <h1>LUNAR LANDER</h1>
-  <p class="tagline">
-    <a href="https://github.com/aayala4/Lunar-Lander-Python">aayala4's Lunar-Lander-Python</a>
-    ported to <a href="https://github.com/yhirose/culebra">Culebra</a>, running here as WebAssembly.
-  </p>
-
   <div class="game" id="game">
     <img src="./assets/poster.png" alt="Lunar Lander title screen" width="1400" height="800">
     <p class="loading" id="loading">loading&#8230;</p>
   </div>
-  <p class="hint">Press P to start, or click the game.</p>
+  <p class="tagline">
+    <a href="https://github.com/aayala4/Lunar-Lander-Python">aayala4's Lunar-Lander-Python</a>
+    ported to <a href="https://github.com/yhirose/culebra">Culebra</a>, running here as WebAssembly.
+  </p>
   <pre id="log" hidden></pre>
 
   <h2>Controls</h2>
   <dl>
     <dt>P</dt><dd>start a round</dd>
-    <dt>&#8592; &#8594;</dt><dd>rotate the hull (it spawns pointing sideways, so level it first)</dd>
-    <dt>&#8593; &#8595;</dt><dd>strengthen and weaken the thrusters</dd>
+    <dt>&#8592; &#8594; / H L</dt><dd>rotate the hull (it spawns pointing sideways, so level it first)</dd>
+    <dt>&#8593; &#8595; / K J</dt><dd>strengthen and weaken the thrusters</dd>
     <dt>Q</dt><dd>back to the title screen</dd>
+    <dt>F</dt><dd>toggle fullscreen</dd>
+  </dl>
+
+  <h2>Gamepad</h2>
+  <dl>
+    <dt>Left stick / D-pad &#8592; &#8594;</dt><dd>rotate the hull</dd>
+    <dt>RB</dt><dd>strengthen thrusters</dd>
+    <dt>LB</dt><dd>weaken thrusters</dd>
+    <dt>A</dt><dd>start a round</dd>
+    <dt>B</dt><dd>back to the title screen</dd>
+    <dt>Y / Menu</dt><dd>toggle fullscreen</dd>
   </dl>
 
   <h2>Landing</h2>
@@ -151,6 +169,81 @@
   // key is going when the game does not respond to it.
   var LOG = document.getElementById("log");
   var DEBUG = new URLSearchParams(location.search).get("debug") === "1";
+
+  // The stage is same-origin with the embedded Playground, so fullscreen just
+  // takes the outer box; the canvas pane inside already letterboxes to the
+  // framebuffer's own ratio no matter what shape it's handed (see .pg-canvas
+  // in the Playground's styles.css), so nothing here has to preserve 7:4.
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.getElementById("game").requestFullscreen();
+    }
+  }
+
+  // Gamepad: A/B/D-pad/stick/shoulders, standard mapping. The Gamepad API has
+  // no events for stick or trigger motion (only connect/disconnect), so this
+  // polls every animation frame and dispatches straight onto the canvas pane
+  // — the same trick the click-to-start handler (below) uses, and safe for
+  // the same reason: a synthetic event targeting the pane already reads as
+  // "handled" to the outer relay above (deliverFrom's target !== pane
+  // check), so it goes to the Playground's own listener once and no further.
+  // KEY_BITS there keys off e.key, so left/right/up/down carry the Arrow*
+  // name in both key and code; P/Q are letters, where key and code differ
+  // (key: "p" is what the round-start/quit vocabulary matches on, code:
+  // "KeyP" is what routes it there in the first place — see app.js's
+  // keyName()). Y and the Menu button both double for F since controllers
+  // don't agree on which one a given pad puts within thumb's reach.
+  var PANE = null;
+  var GAMEPAD_STATE = {};
+  var STICK_DEADZONE = 0.5;
+  function heldKey(code, down) {
+    down = !!down;
+    if (!!GAMEPAD_STATE[code] === down) return;
+    GAMEPAD_STATE[code] = down;
+    if (!PANE) return;
+    PANE.dispatchEvent(new KeyboardEvent(down ? "keydown" : "keyup", {
+      key: code, code: code, bubbles: true,
+    }));
+  }
+  function tapKey(key, code, down) {
+    if (!down) { GAMEPAD_STATE[code] = false; return; }
+    if (GAMEPAD_STATE[code]) return;  // already down; wait for release
+    GAMEPAD_STATE[code] = true;
+    if (!PANE) return;
+    ["keydown", "keyup"].forEach(function (type) {
+      PANE.dispatchEvent(new KeyboardEvent(type, { key: key, code: code, bubbles: true }));
+    });
+  }
+  function tapAction(id, down, fn) {
+    if (!down) { GAMEPAD_STATE[id] = false; return; }
+    if (GAMEPAD_STATE[id]) return;
+    GAMEPAD_STATE[id] = true;
+    fn();
+  }
+  function pollGamepad() {
+    requestAnimationFrame(pollGamepad);
+    if (!navigator.getGamepads) return;
+    var pads = navigator.getGamepads();
+    for (var i = 0; i < pads.length; i++) {
+      var gp = pads[i];
+      // "standard" guarantees the 17-button, 4-axis layout the Gamepad API
+      // spec defines for it, so every index below is always there.
+      if (!gp || !gp.connected || gp.mapping !== "standard") continue;
+      var axis = gp.axes[0];
+      heldKey("ArrowLeft", gp.buttons[14].pressed || axis < -STICK_DEADZONE);
+      heldKey("ArrowRight", gp.buttons[15].pressed || axis > STICK_DEADZONE);
+      heldKey("ArrowDown", gp.buttons[4].pressed);  // LB: weaken thrust
+      heldKey("ArrowUp", gp.buttons[5].pressed);    // RB: strengthen thrust
+      tapKey("p", "KeyP", gp.buttons[0].pressed);   // A: start a round
+      tapKey("q", "KeyQ", gp.buttons[1].pressed);   // B: back to the title
+      tapAction("fullscreen", gp.buttons[3].pressed || gp.buttons[9].pressed,
+        toggleFullscreen);                          // Y / Menu: fullscreen
+      return;  // one pad drives the game; the rest, if any, are ignored
+    }
+  }
+  requestAnimationFrame(pollGamepad);
   if (DEBUG) LOG.hidden = false;
   function log(m) {
     if (!DEBUG) return;
@@ -206,6 +299,7 @@
     if (!pane) return false;
     if (frame.dataset.adopted) return true;
     frame.dataset.adopted = "1";
+    PANE = pane;  // the gamepad loop (below) has no adoptFrame closure of its own
     doc.documentElement.style.background = "#000";
     doc.body.style.margin = "0";
     var innerActive = function () {
@@ -252,12 +346,30 @@
     // repeated onto it. A repeat arrives with the pane as its target, so it
     // stops there rather than bouncing.
     var PLAYED = /^(Arrow(Up|Down|Left|Right)|Key[PQ]|Escape)$/;
+    // hjkl as a second d-pad, vim-style: rewritten to the arrow they stand in
+    // for before forwarding, so the pane sees an ordinary arrow press and
+    // needs no idea these exist.
+    var VIM = { KeyH: "ArrowLeft", KeyJ: "ArrowDown", KeyK: "ArrowUp", KeyL: "ArrowRight" };
     var deliverFrom = function (at) {
       return function (e) {
         // window capture and document capture both see the same press; act once.
         if (e.__lunar) return;
         e.__lunar = true;
-        var mine = PLAYED.test(e.code) && e.target !== pane;
+        // F is ours, not the game's — it never reaches the pane, so it has to
+        // be caught here, on the same four contexts already wired for the
+        // played keys, rather than repeated onto anything.
+        if (e.type === "keydown" && e.code === "KeyF" && !e.repeat) {
+          toggleFullscreen();
+          return;
+        }
+        // hjkl always needs rewriting, even when the press landed straight on
+        // the pane (the normal case once it has focus): unlike a real arrow,
+        // the pane's own listener has no idea what to do with "h". Once
+        // rewritten the code becomes an Arrow*, which isn't in VIM, so the
+        // redispatched copy takes the ordinary target!==pane path below and
+        // this doesn't loop.
+        var vimCode = VIM[e.code];
+        var mine = vimCode ? true : (PLAYED.test(e.code) && e.target !== pane);
         if (DEBUG && e.type === "keydown") {
           log((e.view === window ? "outer " : "inner ") + where(e) +
               " on=" + at + " innerActive=" + innerActive());
@@ -268,8 +380,8 @@
         if (!mine) return;
         e.preventDefault();  // and arrows stop scrolling the page while playing
         pane.dispatchEvent(new KeyboardEvent(e.type, {
-          key: e.key,
-          code: e.code,
+          key: vimCode || e.key,
+          code: vimCode || e.code,
           repeat: e.repeat,
           bubbles: true,
         }));
