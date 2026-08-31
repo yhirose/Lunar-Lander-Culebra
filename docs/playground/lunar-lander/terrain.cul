@@ -165,6 +165,29 @@ class Terrain {
       let cx = Math.round((x1 + x2) / 2.0)
       text_at("{s.value}x", cx, Math.round(y) + 15, LABEL)
     }
+    self.bridge_seams()
+  }
+
+  # `place_spots` only rejects a candidate that shares a point with an
+  # already-placed pad, so two pads can still land back to back with no
+  # terrain between them. Each gets its own independently-rolled height, so
+  # the seam between them is a bit of ground neither pad's double line
+  # covers, which reads as a chip out of the ground. Bridge that seam with
+  # the same double line so it draws as one uneven strip instead.
+  bridge_seams() {
+    mut sorted = self.spots.map(|s| s)
+    sorted.sort_by(|s| s.index)
+    for i in 1..sorted.size() {
+      let prev = sorted[i - 1]
+      let cur = sorted[i]
+      continue if cur.index - (prev.index + prev.length - 1) > 1
+      let px = self.xs[prev.index + prev.length - 1]
+      let py = self.ys[prev.index + prev.length - 1]
+      let cx = self.xs[cur.index]
+      let cy = self.ys[cur.index]
+      Canvas.line(px, py - 1, cx, cy - 1, WHITE)
+      Canvas.line(px, py - 2, cx, cy - 2, WHITE)
+    }
   }
 }
 
