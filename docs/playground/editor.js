@@ -1,15 +1,21 @@
 // CodeMirror 6 wiring for the playground editor. Loaded from esm.sh (CDN, no
-// local vendoring/build step). esm.sh dedupes @codemirror/state|view across
-// packages ONLY when the versions agree with what `codemirror@6.0.1` resolves
-// transitively — that is @codemirror/state@6.7.1. Importing StateField from any
-// OTHER state version loads a second instance and breaks instanceof-based
-// extension resolution ("Unrecognized extension value"). So the direct
-// @codemirror/state import below must stay pinned to 6.7.1.
+// local vendoring/build step). esm.sh serves a single module instance per
+// *resolved* file URL, so every package whose object identity matters
+// (@codemirror/state's Facet/StateField, @codemirror/view's facets,
+// @lezer/highlight's Tags) must resolve to the same file here as it does
+// through `codemirror@6.0.1`'s own transitive imports. Those imports use
+// semver RANGES that esm.sh resolves live, so an exact pin on our side drifts
+// out of agreement the moment upstream publishes a patch — which is how this
+// once broke with "Unrecognized extension value in extension set" (two
+// @codemirror/state instances, breaking instanceof-based extension
+// resolution). Mirroring the ranges instead keeps the two sides pinned to each
+// other rather than to a version number. Keep them matching what
+// `curl https://esm.sh/codemirror@6.0.1` (and the shims it pulls) declares.
 import { EditorView, basicSetup } from "https://esm.sh/codemirror@6.0.1";
-import { keymap, Decoration } from "https://esm.sh/@codemirror/view@6.23.0";
-import { StateField, StateEffect } from "https://esm.sh/@codemirror/state@6.7.1";
-import { indentWithTab } from "https://esm.sh/@codemirror/commands@6.3.0";
-import { syntaxHighlighting } from "https://esm.sh/@codemirror/language@6.12.4";
+import { keymap, Decoration } from "https://esm.sh/@codemirror/view@^6.0.0";
+import { StateField, StateEffect } from "https://esm.sh/@codemirror/state@^6.0.0";
+import { indentWithTab } from "https://esm.sh/@codemirror/commands@^6.0.0";
+import { syntaxHighlighting } from "https://esm.sh/@codemirror/language@^6.0.0";
 import { culebraLanguage, culebraHighlightStyle } from "./culebra-lang.js";
 
 // Error-line highlight: a failed run carries `at LINE:COL` in its message (see
