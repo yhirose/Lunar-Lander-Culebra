@@ -173,10 +173,11 @@ enum Landing {
   TooFast,
 }
 
-# What the pending deadline does when it comes due.
+# What the pending deadline does when it comes due, carrying the frame it is
+# due on -- a payload variant instead of a hand-paired (Timer, due) tuple.
 enum Timer {
-  NextLife,
-  ToMenu,
+  NextLife(Long),
+  ToMenu(Long),
 }
 
 class Game {
@@ -196,7 +197,7 @@ class Game {
   # release both fall between two frames. Starting a round and leaving one are
   # single presses, so they read the edge queue instead.
   pressed = []
-  pending = nil  # (Timer, frame it is due)
+  pending = nil  # a Timer variant carrying the frame it is due, or nil
   demo = false
   confirming_quit = false  # showing "Quit?" over the title screen
   confirming_menu = false  # showing "Back to title?" over the round in play
@@ -238,19 +239,22 @@ class Game {
   # drawn is what decides which timer to arm: a crash that also empties the
   # tank runs crashed() and out_of_fuel() on the same frame, and it is the
   # game-over return that has to win.
-  schedule(timer, seconds) {
+  schedule(make_timer, seconds) {
     let due = self.fc + Math.round(seconds * 60.0)
-    self.pending = (timer, due) if self.pending == nil
+    self.pending = make_timer(due) if self.pending == nil
   }
 
   fire_due() {
-    return if self.pending == nil
-    let (timer, due) = self.pending
-    return if self.fc < due
-    self.pending = nil
-    match timer {
-      t: NextLife => self.next_life(),
-      t: ToMenu => self.to_menu(),
+    match self.pending {
+      NextLife(due) if self.fc >= due => {
+        self.pending = nil
+        self.next_life()
+      },
+      ToMenu(due) if self.fc >= due => {
+        self.pending = nil
+        self.to_menu()
+      },
+      _ => nil,
     }
   }
 
