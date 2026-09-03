@@ -28,7 +28,8 @@ sideways, so the first thing to do is rotate it upright.
 D hands the controls to the autopilot, and D again takes them back, at any
 point in a round; pressed on the title screen it starts a round the autopilot
 is already flying. `DEMO` sits at the top of the HUD for as long as it has
-them, and it flies the same way the headless run below does.
+them, and it flies the same way the headless run below does: it picks a pad,
+crosses to it, and lands on it level, which over 80 seeds it does every time.
 
 Put both feet down under 12 units of vertical speed and 25 of horizontal for a
 good landing, worth 50 points and 50 units of fuel back. The flattened pads
@@ -37,11 +38,12 @@ it pays. Come in faster and it is a hard landing or a crash, and a crash costs
 100 fuel. When the tank empties, the game is over.
 
 Headless autopilot, for a regression check or a machine with no display. It
-flies a fixed seed and writes `shot.png` of its last frame:
+flies a fixed seed -- picking a landing pad, crossing to it and setting down
+on it -- and writes `shot.png` of its last frame:
 
 ```bash
-CULEBRA_CANVAS_HEADLESS=1 culebra lunar_lander.cul demo 1200
-# => score 50, fuel 723 after 1200 frames
+CULEBRA_CANVAS_HEADLESS=1 culebra lunar_lander.cul demo 1400
+# => score 250, fuel 652 after 1400 frames
 ```
 
 Tests:

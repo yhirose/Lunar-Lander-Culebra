@@ -26,6 +26,7 @@ let WIDTH = 1400
 let HEIGHT = 800
 let PI = 3.1415926
 let DT = 1.0 / 60.0  # pgzero passed the real frame time; Canvas is vsynced
+let GRAVITY = 10.0 * DT  # the fall the thrust has to cancel, per frame
 
 let UPRIGHT = -PI / 2.0  # the hull angle that puts both feet underneath
 
@@ -378,7 +379,7 @@ class Game {
     s.spawn() if s.y < -50.0
 
     s.xvel = Math.clamp(s.xvel, -100.0, 100.0)
-    s.yvel += 10.0 * DT  # gravity
+    s.yvel += GRAVITY
     s.accelerate()
 
     if self.demo {
@@ -426,32 +427,95 @@ class Game {
     }
   }
 
-  # Enough of a pilot to fly the demo: tilt into the drift until the
-  # horizontal speed is inside the landing tolerance, level off, and ride a
-  # descent rate that eases as the ground comes up. One action per frame, like
-  # the keyboard. It reads the ship rather than remembering anything, so D can
+  # The screen wraps, so the short way to a target may be off one edge and
+  # back in on the other.
+  wrapped_dx(tx) {
+    let dx = tx - self.ship.x
+    cond {
+      dx > WIDTH / 2.0 => dx - WIDTH,
+      dx < -WIDTH / 2.0 => dx + WIDTH,
+      _ => dx,
+    }
+  }
+
+  # The pad the demo flies to: the one nearest where a life starts, taking
+  # the wider of two that are about as close, since both feet have to come
+  # down on the same flat and the narrowest pad is 22 px against an 11 px
+  # stance. Measured from the spawn column rather than from the ship, so it
+  # stays the same pad for the whole life -- read off the live position it
+  # re-picks as the ship crosses the field, and the ship chases the switch
+  # back and forth. Nil where the terrain placed no pad at all.
+  demo_pad() {
+    mut best = nil
+    for spot in self.terrain.spots {
+      let (x1, x2) = self.terrain.span(spot)
+      let pad = {cx: (x1 + x2) / 2.0, w: x2 - x1,
+                 d: Math.abs((x1 + x2) / 2.0 - lander.SPAWN_X)}
+      best = pad if best == nil || pad.d < best.d - 120.0 ||
+        pad.d < best.d + 120.0 && pad.w > best.w
+    }
+    best
+  }
+
+  # Enough of a pilot to fly the demo: pick a pad, then fly the hull as a
+  # thrust vector -- work out the acceleration that would close the speed
+  # error on both axes, and solve back for the one attitude and throttle that
+  # deliver it. The hull only pushes along its own axis, so steering and
+  # holding altitude are the same control and cannot be run as a separate
+  # "tilt for x, throttle for y" pair: that pair brakes with the throttle at
+  # 0, which is no horizontal authority at all. One action per frame, like the
+  # keyboard. It reads the ship rather than remembering anything, so D can
   # hand it a hull mid-flight in whatever attitude the player left it in.
   autopilot() {
     let s = self.ship
+    let step = PI / 14.0
+    let pad = self.demo_pad()
+    let dx = pad == nil ? 0.0 : self.wrapped_dx(pad.cx)
     # Clearance over the ground actually below the ship, not the HUD's
     # altitude, because the terrain has peaks to fly into.
     let ground = self.terrain.top_near(Math.round(s.x)) ?? HEIGHT
     let clearance = to_float(ground) - s.y
-    let tilt = clearance > 150.0 ? 0.6 : 0.25
-    let want_ang = cond {
-      s.xvel > 5.0 => UPRIGHT - tilt,
-      s.xvel < -5.0 => UPRIGHT + tilt,
-      _ => UPRIGHT,
-    }
-    let want_vel = Math.clamp(clearance * 0.35, 10.0, 60.0)
-    # The deadband is a full rotation step, or the hull hunts either side of
-    # `want_ang` forever and never gets a frame to work the throttle.
-    let step = PI / 14.0
+
+    # Cross at a speed that eases as the pad comes up, so the drift is already
+    # gone on arrival rather than being braked over it.
+    let want_xvel = Math.clamp(dx * 0.3, -90.0, 90.0)
+    # Both feet have to reach the ground on the same frame, so the descent
+    # waits until the pad is underneath and the drift is out; below 90 px it
+    # is too late to go around and it rides down whatever it looks like.
+    let lined_up = Math.abs(dx) < 5.0 && Math.abs(s.xvel) < 1.5
+    let want_yvel = clearance < 90.0 || lined_up
+      ? Math.clamp(clearance * 0.45, 8.0, 70.0)
+      : Math.clamp((clearance - 170.0) * 0.3, -15.0, 70.0)
+
+    # The thrust that closes both errors, in throttle units along each axis
+    # (`accelerate` scales them apart), with gravity to cancel on top of the
+    # vertical one. Only the upper half turn is reachable, so a demand to fall
+    # faster than gravity is simply no thrust rather than a downward push.
+    let tx = Math.clamp((want_xvel - s.xvel) * 0.08, -0.45, 0.45) / lander.THRUST_X
+    let ty = Math.min((want_yvel - s.yvel) * 0.08 - GRAVITY, 0.0) / lander.THRUST_Y
+    # Level for the last stretch whatever the drift is doing: a hull still
+    # tilted puts one leg down first, which the collision test reads as a
+    # crash rather than as a landing.
+    let flare = clearance < 22.0
+    let mag = flare ? Math.abs(ty) : Math.sqrt(tx * tx + ty * ty)
+    let want_throttle = Math.clamp(Math.round(mag), 0, 8)
+    # atan2 answers +PI for a purely leftward push, which is the same heading
+    # as -PI; the hull only turns through the negative half. With no thrust
+    # wanted at all the heading is meaningless and answers sideways, so hold
+    # the hull level instead: the rotation arms below come first, and a hull
+    # chasing a meaningless heading never gets a frame back to the throttle --
+    # which then stays where it was and flies the ship away from the pad.
+    let dir = Math.atan2(ty, tx)
+    let want_ang = flare || want_throttle == 0 ? UPRIGHT : (dir > 0.0 ? -PI : dir)
+
+    # The hull turns a step at a time and the throttle moves a notch at a
+    # time, so the deadband is half a step: `want_ang` is a continuous
+    # heading, and the reachable angles sit a step apart.
     cond {
-      s.ang - want_ang > step => s.rotate(s.ang - step),
-      want_ang - s.ang > step => s.rotate(s.ang + step),
-      s.yvel > want_vel => s.throttle_by(1),
-      s.yvel < want_vel - 3.0 => s.throttle_by(-1),
+      s.ang - want_ang > step / 2.0 => s.rotate(s.ang - step),
+      want_ang - s.ang > step / 2.0 => s.rotate(s.ang + step),
+      s.throttle < want_throttle => s.throttle_by(1),
+      s.throttle > want_throttle => s.throttle_by(-1),
       _ => nil,
     }
   }

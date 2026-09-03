@@ -22,8 +22,17 @@ let LEG_END = 12.0  # drawn leg length
 let FOOT = 11.0     # the leg point that counts as a foot
 let LEG_SPREAD = PI / 6.0
 
+let SPAWN_X = 100.0  # where a life starts, high on the left
+
 let MAX_THROTTLE = 8
 let BURN_RATE = 0.08  # fuel per throttle step per frame
+
+# The original's two thrust constants. The hull pushes harder along y than
+# along x, so thrust is not a plain polar vector: anything solving for the
+# attitude that delivers a wanted acceleration (lunar_lander.cul's autopilot)
+# has to scale the axes apart, which is why these are named and exported.
+let THRUST_X = 0.09
+let THRUST_Y = 0.175
 
 class Ship {
   x = 0.0
@@ -44,7 +53,7 @@ class Ship {
 
   # The start-of-life state: high on the left, drifting right.
   spawn() {
-    self.x = 100.0
+    self.x = SPAWN_X
     self.y = 100.0
     self.xvel = 50.0
     self.yvel = 0.0
@@ -65,8 +74,8 @@ class Ship {
   # Thrust along the hull axis, and the fuel it costs. The horizontal and
   # vertical components use different constants, as in the original.
   accelerate() {
-    self.xvel += 0.09 * self.throttle * Math.cos(self.ang)
-    self.yvel += 0.175 * self.throttle * Math.sin(self.ang)
+    self.xvel += THRUST_X * self.throttle * Math.cos(self.ang)
+    self.yvel += THRUST_Y * self.throttle * Math.sin(self.ang)
     self.set_gas(self.gas - BURN_RATE * self.throttle)
   }
 
@@ -146,4 +155,4 @@ class Ship {
   }
 }
 
-export {Ship, Hit, LEG_END, LEG_SPREAD}
+export {Ship, Hit, LEG_END, LEG_SPREAD, THRUST_X, THRUST_Y, SPAWN_X}
