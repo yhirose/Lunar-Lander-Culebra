@@ -13,9 +13,11 @@
 #                                       # last frame, for a machine with no
 #                                       # display (CULEBRA_CANVAS_HEADLESS=1)
 #
-# Left/Right rotate, Up/Down work the throttle, Q returns to the menu. From
-# the title screen, Q asks to confirm before quitting (native only -- there
-# is no "quit" on the web, so the Playground build never offers it).
+# Left/Right rotate, Up/Down work the throttle, D hands the controls to the
+# autopilot and takes them back, Q returns to the menu. From the title screen,
+# D starts a round the autopilot flies, and Q asks to confirm before quitting
+# (native only -- there is no "quit" on the web, so the Playground build never
+# offers it).
 
 import lander from './ship.cul'
 import land from './terrain.cul'
@@ -75,6 +77,7 @@ let CONTROLS = [
   "Controls:",
   "Left and Right Arrows: Rotate Ship",
   "Up and Down Arrows: Strengthen/Weaken Thrusters",
+  "D: Demo Mode On/Off (the autopilot flies)",
   "Q: Quit game",
 ]
 let CRASHED = ["YOU CRASHED", "YOU LOST 100 FUEL UNITS"]
@@ -225,6 +228,9 @@ class Game {
   to_menu() {
     self.mode = Mode.Menu
     self.pending = nil
+    # A demo the player asked for with D lasts as long as the round does; the
+    # title screen goes back to whatever the command line asked for.
+    self.demo = DEMO
   }
 
   out_of_fuel() {
@@ -275,6 +281,11 @@ class Game {
         self.animate_menu_ship()
         if self.confirming_quit {
           self.quit_menu()
+        } else if self.demo_pressed() {
+          # D from here starts the round with the autopilot already flying,
+          # rather than arming something P then has to collect.
+          self.demo = true
+          self.start_game()
         } else {
           # The demo lingers on the title screen, then presses P itself.
           self.start_game() if self.pressed.contains("p") ||
@@ -289,6 +300,9 @@ class Game {
         if self.confirming_menu {
           self.confirm_menu()
         } else {
+          # Outside controls(), which never runs while the autopilot has the
+          # controls -- and its one-key-a-frame rule is the pilot's, not this.
+          self.demo = !self.demo if self.demo_pressed()
           self.update_play()
         }
       },
@@ -306,6 +320,18 @@ class Game {
   }
   pad_right() {
     Canvas.pad_held(Canvas.PAD_RIGHT) || Canvas.pad_axis(Canvas.AXIS_LX) > 0.5
+  }
+
+  # D, or X on a pad -- the one face button the rest of the vocabulary leaves
+  # free. A press, not a state, so it reads the same edge queue P and Q do.
+  demo_pressed() {
+    self.pressed.contains("d") || Canvas.pad_pressed(Canvas.PAD_X)
+  }
+
+  # Q, or B on a pad. Read by both pilots: leaving a round is the watcher's
+  # call even while the autopilot is flying it.
+  quit_pressed() {
+    self.pressed.contains("q") || Canvas.pad_pressed(Canvas.PAD_B)
   }
 
   # Q again quits outright; P backs out -- both reuse the meaning they
@@ -355,7 +381,12 @@ class Game {
     s.yvel += 10.0 * DT  # gravity
     s.accelerate()
 
-    self.demo ? self.autopilot() : self.controls()
+    if self.demo {
+      self.autopilot()
+      self.confirming_menu = true if self.quit_pressed()
+    } else {
+      self.controls()
+    }
     return if self.mode != Mode.Playing
 
     s.hitbox()
@@ -390,8 +421,7 @@ class Game {
         s.throttle_by(-1),
       Canvas.key("up") || Canvas.key("k") || Canvas.pad_held(Canvas.PAD_RB) =>
         s.throttle_by(1),
-      self.pressed.contains("q") || Canvas.pad_pressed(Canvas.PAD_B) =>
-        self.confirming_menu = true,
+      self.quit_pressed() => self.confirming_menu = true,
       _ => nil,
     }
   }
@@ -399,7 +429,8 @@ class Game {
   # Enough of a pilot to fly the demo: tilt into the drift until the
   # horizontal speed is inside the landing tolerance, level off, and ride a
   # descent rate that eases as the ground comes up. One action per frame, like
-  # the keyboard.
+  # the keyboard. It reads the ship rather than remembering anything, so D can
+  # hand it a hull mid-flight in whatever attitude the player left it in.
   autopilot() {
     let s = self.ship
     # Clearance over the ground actually below the ship, not the HUD's
@@ -509,18 +540,19 @@ class Game {
   }
 
   # The title, the prompt and the Controls block, together, span from the
-  # title's own top to the last Controls line's bottom -- 294 px at these
-  # sizes and gaps. Drawn at their original offsets that span sits well
-  # below HEIGHT / 2, so every y below is that offset less 87, which slides
-  # the block up until its own midpoint lands on HEIGHT / 2 instead.
+  # title's own top to the last Controls line's bottom -- 324 px at these
+  # sizes and gaps, one Controls line more than the original's four. Drawn at
+  # their original offsets that span sits well below HEIGHT / 2, so every y
+  # below is that offset less 102, which slides the block up until its own
+  # midpoint lands on HEIGHT / 2 instead.
   draw_menu() {
     if self.confirming_quit {
       block_centered(QUIT_CONFIRM, HEIGHT / 2 - 15, TEXT)
       return
     }
-    text_centered("LUNAR LANDER", HEIGHT / 2 - 147, TITLE)
-    text_centered("Press P to play", HEIGHT / 2 - 37, TEXT)
-    block_centered(CONTROLS, HEIGHT / 2 + 33, TEXT)
+    text_centered("LUNAR LANDER", HEIGHT / 2 - 162, TITLE)
+    text_centered("Press P to play, D to watch a demo", HEIGHT / 2 - 52, TEXT)
+    block_centered(CONTROLS, HEIGHT / 2 + 18, TEXT)
     self.menu_ship.draw()
   }
 
@@ -568,6 +600,9 @@ class Game {
       ],
       width: RIGHT_HUD_W,
     )
+    # Between the two HUD columns, in the one strip of the top row neither
+    # reaches: the player is watching rather than flying, and should be told.
+    text_centered("DEMO", 40, HUD) if self.demo
   }
 }
 

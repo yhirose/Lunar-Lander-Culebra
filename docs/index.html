@@ -134,6 +134,7 @@
     <dt>P</dt><dd>start a round</dd>
     <dt>&#8592; &#8594; / H L</dt><dd>rotate the hull (it spawns pointing sideways, so level it first)</dd>
     <dt>&#8593; &#8595; / K J</dt><dd>strengthen and weaken the thrusters</dd>
+    <dt>D</dt><dd>demo mode on and off &#8212; the autopilot flies, or hands back; from the title screen it starts a round it flies</dd>
     <dt>Q</dt><dd>back to the title screen</dd>
     <dt>F</dt><dd>toggle fullscreen</dd>
   </dl>
@@ -145,6 +146,7 @@
     <dt>LB</dt><dd>weaken thrusters</dd>
     <dt>A</dt><dd>start a round</dd>
     <dt>B</dt><dd>back to the title screen</dd>
+    <dt>X</dt><dd>demo mode on and off</dd>
     <dt>Y / Menu</dt><dd>toggle fullscreen</dd>
   </dl>
 
@@ -190,7 +192,7 @@
   // "handled" to the outer relay above (deliverFrom's target !== pane
   // check), so it goes to the Playground's own listener once and no further.
   // KEY_BITS there keys off e.key, so left/right/up/down carry the Arrow*
-  // name in both key and code; P/Q are letters, where key and code differ
+  // name in both key and code; D/P/Q are letters, where key and code differ
   // (key: "p" is what the round-start/quit vocabulary matches on, code:
   // "KeyP" is what routes it there in the first place — see app.js's
   // keyName()). Y and the Menu button both double for F since controllers
@@ -238,6 +240,7 @@
       heldKey("ArrowUp", gp.buttons[5].pressed);    // RB: strengthen thrust
       tapKey("p", "KeyP", gp.buttons[0].pressed);   // A: start a round
       tapKey("q", "KeyQ", gp.buttons[1].pressed);   // B: back to the title
+      tapKey("d", "KeyD", gp.buttons[2].pressed);   // X: demo mode on/off
       tapAction("fullscreen", gp.buttons[3].pressed || gp.buttons[9].pressed,
         toggleFullscreen);                          // Y / Menu: fullscreen
       return;  // one pad drives the game; the rest, if any, are ignored
@@ -345,7 +348,7 @@
     // pane is left to the Playground's own listener, and any other press is
     // repeated onto it. A repeat arrives with the pane as its target, so it
     // stops there rather than bouncing.
-    var PLAYED = /^(Arrow(Up|Down|Left|Right)|Key[PQ]|Escape)$/;
+    var PLAYED = /^(Arrow(Up|Down|Left|Right)|Key[DPQ]|Escape)$/;
     // hjkl as a second d-pad, vim-style: rewritten to the arrow they stand in
     // for before forwarding, so the pane sees an ordinary arrow press and
     // needs no idea these exist.

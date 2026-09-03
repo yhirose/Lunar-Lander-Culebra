@@ -25,6 +25,11 @@ P starts a round. Left and Right rotate the hull, Up and Down work the
 throttle, Q returns to the title screen, Esc quits. The hull spawns pointing
 sideways, so the first thing to do is rotate it upright.
 
+D hands the controls to the autopilot, and D again takes them back, at any
+point in a round; pressed on the title screen it starts a round the autopilot
+is already flying. `DEMO` sits at the top of the HUD for as long as it has
+them, and it flies the same way the headless run below does.
+
 Put both feet down under 12 units of vertical speed and 25 of horizontal for a
 good landing, worth 50 points and 50 units of fuel back. The flattened pads
 marked `2x` through `5x` multiply the score, and the narrower the pad the more
